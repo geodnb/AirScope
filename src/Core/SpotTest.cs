@@ -21,6 +21,9 @@ public sealed class SpotTestResult
     public double TxAvg { get; set; }
     public double? RetryAvg { get; set; }
     public int Roams { get; set; }
+    public double? PingAvg { get; set; }
+    public double? PingP95 { get; set; }
+    public double? PingLossPct { get; set; }
 
     // Filled in by the UI relative to the chosen baseline
     [System.Text.Json.Serialization.JsonIgnore] public string DeltaRssi { get; set; } = "";
@@ -37,6 +40,8 @@ public sealed class SpotTestResult
     public string RangeText => $"{RssiMin:0} … {RssiMax:0}";
     public string StabilityText => $"±{RssiStdDev:0.0}";
     public string RetryText => RetryAvg is double r ? $"{r:0.0}%" : "—";
+    [System.Text.Json.Serialization.JsonIgnore] public string PingText => PingAvg is double a ? $"{PingStats.Ms(a)} / {PingStats.Ms(PingP95)}" : "—";
+    [System.Text.Json.Serialization.JsonIgnore] public string LossText => PingLossPct is double l ? $"{l:0.#}%" : "—";
 }
 
 public sealed class SpotTestRunner
@@ -66,16 +71,20 @@ public sealed class SpotTestRunner
         }
     }
 
-    public SpotTestResult? Finish(BssInfo? apInfo)
+    /// <param name="scans">Scan periods during the test; samples inside them are left out (Windows can still scan in the background).</param>
+    public SpotTestResult? Finish(BssInfo? apInfo, IReadOnlyList<ScanMark> scans)
     {
-        lock (_lock) return FinishLocked(apInfo);
+        lock (_lock) return FinishLocked(apInfo, scans);
     }
 
-    private SpotTestResult? FinishLocked(BssInfo? apInfo)
+    private SpotTestResult? FinishLocked(BssInfo? apInfo, IReadOnlyList<ScanMark> scans)
     {
         if (_samples.Count == 0 || _last == null) return null;
-        var st = Stats.Of(_samples.Select(x => (double)x.Rssi).ToList());
-        var retries = _samples.Where(x => x.RetryPct.HasValue).Select(x => x.RetryPct!.Value).ToList();
+        var clean = new List<LinkSample>();
+        ScanTimeline.ExcludeCovered(_samples, x => x.Utc, scans, clean);
+        var use = clean.Count * 2 >= _samples.Count ? clean : _samples;
+        var st = Stats.Of(use.Select(x => (double)x.Rssi).ToList());
+        var retries = use.Where(x => x.RetryPct.HasValue).Select(x => x.RetryPct!.Value).ToList();
         return new SpotTestResult
         {
             Label = string.IsNullOrWhiteSpace(Label) ? $"Test {DateTime.Now:HH:mm}" : Label.Trim(),
@@ -85,10 +94,10 @@ public sealed class SpotTestRunner
             Bssid = _last.Bssid,
             Channel = _last.Channel,
             Band = apInfo != null ? ChannelMath.BandName(apInfo.Band) : "",
-            Samples = _samples.Count,
+            Samples = use.Count,
             RssiAvg = st.Avg, RssiMin = st.Min, RssiMax = st.Max, RssiStdDev = st.StdDev,
-            RxAvg = _samples.Average(x => x.RxMbps),
-            TxAvg = _samples.Average(x => x.TxMbps),
+            RxAvg = use.Average(x => x.RxMbps),
+            TxAvg = use.Average(x => x.TxMbps),
             RetryAvg = retries.Count > 0 ? retries.Average() : null,
             Roams = _roams
         };
@@ -106,7 +115,11 @@ public static class SpotTestStore
             if (File.Exists(FilePath))
                 return JsonSerializer.Deserialize<List<SpotTestResult>>(File.ReadAllText(FilePath)) ?? new();
         }
-        catch { }
+        catch
+        {
+            // Unreadable – keep a copy rather than letting the next save overwrite the user's history.
+            try { File.Copy(FilePath, FilePath + $".unreadable-{DateTime.Now:yyyyMMdd-HHmmss}", false); } catch { }
+        }
         return new();
     }
 

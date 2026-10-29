@@ -13,7 +13,9 @@ public sealed class BssTrack
 /// <summary>
 /// Runs two independent background loops:
 ///  • a fast link poll (RSSI / rates / retries of the current connection), default 4 Hz
-///  • a scan loop for neighbouring networks, paced by the OS scan-complete notification
+///  • a scan loop for neighbouring networks. When <see cref="ActiveScanning"/> is on it asks the driver to
+///    scan and waits for the OS scan-complete notification; when it's off it never takes the radio
+///    off-channel and just re-reads the list Windows' own background scans keep up to date.
 /// Neither loop touches the UI; consumers subscribe to the events and marshal themselves.
 /// Each Start() gets its own private loop state, so a slow-to-exit old loop can never
 /// corrupt a new one, and loops stop raising events as soon as they're cancelled.
@@ -24,7 +26,7 @@ public sealed class WifiMonitor : IDisposable
     private readonly AppSettings _settings;
     private CancellationTokenSource? _cts;
     private Task? _pollTask, _scanTask;
-    private readonly SemaphoreSlim _scanSignal = new(0, 1);
+    private readonly SemaphoreSlim _scanSignal = new(0, 1);     // a scan completed or failed (not mere list refreshes)
     private readonly SemaphoreSlim _scanKick = new(0, 1);
     private readonly object _bssLock = new();
     private readonly Dictionary<ulong, BssTrack> _bss = new();
@@ -33,15 +35,25 @@ public sealed class WifiMonitor : IDisposable
 
     private volatile object _ifaceBox = Guid.Empty;        // boxed so cross-thread reads are atomic
     private volatile ConnectionInfo _connection = new();
-    private long _lastScanTicks;                            // 0 = never
+    private volatile bool _activeWanted;
+    private int _forceScan;                                 // 1 = "Scan now" pressed
+    private int _cacheDirty;                                // 1 = Windows refreshed its scan list since we last read it
+    private long _lastOwnScanTick = long.MinValue / 2;      // Environment.TickCount64 (monotonic); scan loop only
+    private static readonly TimeSpan MinOwnScanGap = TimeSpan.FromSeconds(3);
 
     public SampleBuffer Samples { get; } = new(30 * 60 * 10 + 64); // 30 min at 10 Hz worst case
+    /// <summary>When scans (ours and Windows') had the radio off-channel.</summary>
+    public ScanTimeline Scans { get; } = new();
+
+    /// <summary>
+    /// Whether the scan loop may trigger scans itself. Off = passive: no off-channel time caused by AirScope,
+    /// neighbour data comes from Windows' cached list. Safe to set from any thread.
+    /// </summary>
+    public bool ActiveScanning { get => _activeWanted; set => _activeWanted = value; }
     public Guid InterfaceId => (Guid)_ifaceBox;
     public ConnectionInfo Connection => _connection;
-    public DateTime? LastScanUtc
-    {
-        get { long t = Interlocked.Read(ref _lastScanTicks); return t == 0 ? null : new DateTime(t, DateTimeKind.Utc); }
-    }
+    /// <summary>When the adapter last finished a scan (ours or Windows'), i.e. how fresh the neighbour list is.</summary>
+    public DateTime? LastScanUtc => Scans.LastEndUtc;
 
     public event Action<LinkSample, ConnectionInfo>? SampleTaken;
     /// <summary>(snapshot, WLAN error code). An error with an empty list means "keep showing the previous data".</summary>
@@ -61,9 +73,10 @@ public sealed class WifiMonitor : IDisposable
         Stop();
         _ifaceBox = iface;
         Samples.Clear();
+        Scans.Clear();
+        Interlocked.Exchange(ref _forceScan, 0);            // a "Scan now" for the old adapter doesn't carry over
         lock (_bssLock) _bss.Clear();
         _connection = new ConnectionInfo();
-        Interlocked.Exchange(ref _lastScanTicks, 0);
         _cts = new CancellationTokenSource();
         var t = _cts.Token;
         _pollTask = Task.Run(() => PollLoop(iface, new PollState(), t));
@@ -83,8 +96,12 @@ public sealed class WifiMonitor : IDisposable
         _pollTask = _scanTask = null;
     }
 
-    /// <summary>Trigger a scan right now instead of waiting for the next interval.</summary>
-    public void ScanNow() => Signal(_scanKick);
+    /// <summary>Trigger a scan right now (even in passive mode) instead of waiting for the next interval.</summary>
+    public void ScanNow()
+    {
+        Interlocked.Exchange(ref _forceScan, 1);
+        Signal(_scanKick);
+    }
 
     private static void Signal(SemaphoreSlim s)
     {
@@ -95,10 +112,15 @@ public sealed class WifiMonitor : IDisposable
 
     private void OnNotification(uint source, uint code, Guid iface)
     {
-        if (iface != InterfaceId) return;
-        if (source == WlanNative.WLAN_NOTIFICATION_SOURCE_ACM &&
-            (code == WlanNative.ACM_SCAN_COMPLETE || code == WlanNative.ACM_SCAN_FAIL || code == WlanNative.ACM_SCAN_LIST_REFRESH))
+        if (iface != InterfaceId || source != WlanNative.WLAN_NOTIFICATION_SOURCE_ACM) return;
+        if (code == WlanNative.ACM_SCAN_COMPLETE || code == WlanNative.ACM_SCAN_FAIL)
+        {
+            Scans.Completed(DateTime.UtcNow);
+            Interlocked.Exchange(ref _cacheDirty, 1);
             Signal(_scanSignal);
+        }
+        else if (code == WlanNative.ACM_SCAN_LIST_REFRESH)
+            Interlocked.Exchange(ref _cacheDirty, 1);   // partial results – re-read, but the scan isn't over
     }
 
     // ------------------------------------------------------------------ fast link poll
@@ -107,7 +129,11 @@ public sealed class WifiMonitor : IDisposable
     {
         public ConnectionInfo? PrevConn;
         public (ulong tx, ulong retry)? PrevCounters;
-        public double? RetryPct;
+        public double? RetryPct, RetryAvg;
+        public DateTime RetryPctUtc;
+        public readonly Queue<(DateTime start, DateTime end, ulong dTx, ulong dRe)> RetryWin = new();
+        public readonly List<LinkSample> Clean = new();
+        public readonly List<ScanMark> Marks = new();
         public DateTime LastConnQueryUtc, LastCounterUtc, LastRssiDropUtc, LastRateDropUtc;
         public ConnectionInfo? LostConn;          // last good connection while a drop is pending
         public DateTime LostAtUtc;
@@ -168,7 +194,7 @@ public sealed class WifiMonitor : IDisposable
         var conn = _connection;
         if (!conn.Connected)
         {
-            st.PrevCounters = null; st.RetryPct = null;
+            st.PrevCounters = null; st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear();
             if (!ct.IsCancellationRequested) SampleTaken?.Invoke(new LinkSample(now, -100, 0, 0, null), conn);
             return;
         }
@@ -177,6 +203,7 @@ public sealed class WifiMonitor : IDisposable
 
         if ((now - st.LastCounterUtc).TotalMilliseconds >= 1000)
         {
+            var from = st.LastCounterUtc;
             st.LastCounterUtc = now;
             var ctrs = _wlan.GetPhyCounters(iface);
             if (ctrs is { } k)
@@ -184,18 +211,36 @@ public sealed class WifiMonitor : IDisposable
                 if (st.PrevCounters is { } p && k.tx >= p.tx && k.retry >= p.retry)
                 {
                     ulong dTx = k.tx - p.tx, dRe = k.retry - p.retry;
-                    if (dTx >= 20) st.RetryPct = Math.Min(100, 100.0 * dRe / dTx);
+                    if (dTx >= 20) { st.RetryPct = Math.Min(100, 100.0 * dRe / dTx); st.RetryPctUtc = now; }
+                    else if ((now - st.RetryPctUtc).TotalSeconds > 5) st.RetryPct = null;   // idle link: don't hold a stale figure forever
+                    st.RetryWin.Enqueue((from, now, dTx, dRe));
+                    while (st.RetryWin.Count > 10) st.RetryWin.Dequeue();   // ~10 s; by count so clock changes can't break it
+                    st.RetryAvg = RollingRetry(st.RetryWin);
                 }
+                else st.RetryWin.Clear();   // first read, or counters reset (reconnect / driver restart)
                 st.PrevCounters = (k.tx, k.retry);
             }
-            else st.RetryPct = null;
+            else { st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.PrevCounters = null; }
         }
 
         if (ct.IsCancellationRequested) return;
-        var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct);
+        var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct, st.RetryAvg, Scans.OwnActive(now), st.PrevCounters != null);
         Samples.Add(s);
         DetectSignalDrop(st, now);
         SampleTaken?.Invoke(s, conn);
+    }
+
+    /// <summary>
+    /// Frame-weighted retry % over the window, leaving out seconds that overlapped a scan. Overlap is checked now,
+    /// not when each second was recorded, so Windows' scans (reported only when they finish) drop out once known.
+    /// Null when there isn't enough scan-free traffic to say.
+    /// </summary>
+    private double? RollingRetry(IEnumerable<(DateTime start, DateTime end, ulong dTx, ulong dRe)> win)
+    {
+        ulong tx = 0, re = 0;
+        foreach (var w in win)
+            if (!Scans.Overlaps(w.start, w.end)) { tx += w.dTx; re += w.dRe; }
+        return tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null;
     }
 
     private static ConnectionInfo CopyWithChannel(ConnectionInfo c, int ch) => new()
@@ -307,15 +352,23 @@ public sealed class WifiMonitor : IDisposable
 
     private static string FormatGap(TimeSpan t) => t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.TotalSeconds:0}s";
 
+    /// <summary>
+    /// Evaluated a few seconds in arrears: Windows only tells us about its own background scans when they
+    /// finish, so waiting lets us discard scan-induced dips instead of reporting them as signal drops.
+    /// </summary>
     private void DetectSignalDrop(PollState st, DateTime now)
     {
         if ((now - st.LastRssiDropUtc).TotalSeconds < 20) return;
-        Samples.CopySince(now.AddSeconds(-12), st.Scratch);
+        var t0 = now - Scans.ExternalLead - TimeSpan.FromMilliseconds(500);
+        Samples.CopySince(t0.AddSeconds(-12), st.Scratch);
+        st.Scratch.RemoveAll(x => x.Utc > t0);
+        Scans.CopySince(t0.AddSeconds(-12), now, st.Marks);
+        ScanTimeline.ExcludeCovered(st.Scratch, x => x.Utc, st.Marks, st.Clean);
         int need = Math.Max(8, (int)(12000.0 / Math.Max(100, _settings.PollMs) * 0.6));
-        if (st.Scratch.Count < need) return;
+        if (st.Clean.Count < need) return;
         double rs = 0, bs = 0; int rn = 0, bn = 0;
-        var cut = now.AddSeconds(-2);
-        foreach (var x in st.Scratch) { if (x.Utc >= cut) { rs += x.Rssi; rn++; } else { bs += x.Rssi; bn++; } }
+        var cut = t0.AddSeconds(-2);
+        foreach (var x in st.Clean) { if (x.Utc >= cut) { rs += x.Rssi; rn++; } else { bs += x.Rssi; bn++; } }
         if (rn < 2 || bn < need / 2) return;
         double d = bs / bn - rs / rn;
         if (d >= 10)
@@ -343,29 +396,82 @@ public sealed class WifiMonitor : IDisposable
                     FetchAndPublish(iface, ct);
                 }
 
-                // Drain a stale signal so we wait for *this* scan's completion.
-                while (_scanSignal.CurrentCount > 0) await _scanSignal.WaitAsync(ct);
-
-                uint rc = _wlan.RequestScan(iface);
-                if (!ct.IsCancellationRequested)
-                    StatusChanged?.Invoke(rc == 0 ? "Scanning…" : $"Scan request refused ({rc}) — using cached results");
-
-                // Scans normally finish in 2–4 s. Fall back to polling the cache if no notification arrives.
-                await _scanSignal.WaitAsync(TimeSpan.FromSeconds(6), ct);
-                FetchAndPublish(iface, ct);
-
-                // Wait the remainder of the interval, unless someone asks for a scan now.
-                var wait = TimeSpan.FromSeconds(Math.Max(1, _settings.ScanSeconds - 2));
-                await _scanKick.WaitAsync(wait, ct);
+                bool force = Interlocked.Exchange(ref _forceScan, 0) == 1;
+                if ((force || _activeWanted) && await ActiveScanAsync(iface, force, ct))
+                {
+                    await RestAsync(iface, TimeSpan.FromSeconds(Math.Max(1, _settings.ScanSeconds - 2)), wakeWhenActive: false, ct);
+                }
+                else
+                {
+                    // Passive: AirScope never takes the radio off-channel. Windows still scans in the background
+                    // now and then; we pick up its results when it says the list changed, or on the interval.
+                    Interlocked.Exchange(ref _cacheDirty, 0);
+                    FetchAndPublish(iface, ct);
+                    await RestAsync(iface, TimeSpan.FromSeconds(Math.Max(5, _settings.ScanSeconds)), wakeWhenActive: true, ct);
+                }
             }
             catch (OperationCanceledException) { return; }
             catch (ObjectDisposedException) when (_wlan.IsDisposed || ct.IsCancellationRequested) { return; }
             catch (Exception ex)
             {
-                // Never let one bad scan stop scanning for the rest of the session.
+                // Never let one bad scan stop scanning for the rest of the session – but don't retry back-to-back.
                 StatusChanged?.Invoke("Scan error: " + ex.Message);
-                try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { return; }
+                try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(2, _settings.ScanSeconds)), ct); } catch (OperationCanceledException) { return; }
             }
+        }
+    }
+
+    /// <summary>Returns false if, after waiting out the minimum gap, scanning was no longer wanted (e.g. a spot test began).</summary>
+    private async Task<bool> ActiveScanAsync(Guid iface, bool force, CancellationToken ct)
+    {
+        // Rapid tab switching shouldn't turn into back-to-back scans. Monotonic clock: a clock change can't stall this.
+        long sinceMs = Environment.TickCount64 - _lastOwnScanTick;
+        long gapMs = (long)MinOwnScanGap.TotalMilliseconds;
+        if (!force && sinceMs >= 0 && sinceMs < gapMs)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(gapMs - sinceMs), ct);
+            if (!_activeWanted) return false;
+        }
+
+        // Drain a stale signal so we wait for *this* scan's completion.
+        while (_scanSignal.CurrentCount > 0) await _scanSignal.WaitAsync(ct);
+
+        _lastOwnScanTick = Environment.TickCount64;
+        var token = Scans.OwnStarted(DateTime.UtcNow);   // before the request, so a fast completion is attributed to us
+        uint rc;
+        try { rc = _wlan.RequestScan(iface); }
+        catch { Scans.OwnCancelled(token); throw; }
+        if (rc != 0) Scans.OwnCancelled(token);
+        if (!ct.IsCancellationRequested)
+            StatusChanged?.Invoke(rc == 0 ? "Scanning…" : $"Scan request refused ({rc}) — using cached results");
+
+        // Scans normally finish in 2–4 s. Without notifications (registration failed) assume ~4 s rather than
+        // shading 6 s of every interval as off-channel.
+        if (rc == 0)
+        {
+            if (_wlan.NotificationsAvailable) await _scanSignal.WaitAsync(TimeSpan.FromSeconds(6), ct);
+            else await Task.Delay(TimeSpan.FromSeconds(4), ct);
+        }
+        Scans.OwnTimedOut(token, DateTime.UtcNow);       // no-op if the completion already closed it
+        Interlocked.Exchange(ref _cacheDirty, 0);
+        FetchAndPublish(iface, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Wait out the interval in 1 s slices. Ends early for "Scan now", and (in passive mode) as soon as active
+    /// scanning is switched on. Re-reads the cache whenever Windows reports it finished a scan of its own.
+    /// </summary>
+    private async Task RestAsync(Guid iface, TimeSpan span, bool wakeWhenActive, CancellationToken ct)
+    {
+        long until = Environment.TickCount64 + (long)span.TotalMilliseconds;   // monotonic
+        while (true)
+        {
+            var left = TimeSpan.FromMilliseconds(until - Environment.TickCount64);
+            if (left <= TimeSpan.Zero) return;
+            if (await _scanKick.WaitAsync(left < TimeSpan.FromSeconds(1) ? left : TimeSpan.FromSeconds(1), ct)) return;
+            if (wakeWhenActive && _activeWanted) return;
+            if (Interlocked.Exchange(ref _cacheDirty, 0) == 1) FetchAndPublish(iface, ct);
         }
     }
 
@@ -383,7 +489,6 @@ public sealed class WifiMonitor : IDisposable
         }
 
         var now = DateTime.UtcNow;
-        Interlocked.Exchange(ref _lastScanTicks, now.Ticks);
         List<BssInfo> snapshot;
         lock (_bssLock)
         {
@@ -391,13 +496,18 @@ public sealed class WifiMonitor : IDisposable
             {
                 if (!_bss.TryGetValue(b.Key, out var t))
                     _bss[b.Key] = t = new BssTrack { Latest = b, FirstSeenUtc = now };
+                else if (b.Tsf != 0 && b.Tsf == t.Latest.Tsf)
+                    continue;   // same beacon re-read from Windows' cache – not a new sighting, so don't refresh "seen" or history
                 t.Latest = b;
                 t.History.Add((now, b.Rssi));
                 int drop = 0;
                 while (drop < t.History.Count && now - t.History[drop].utc > HistoryKeep) drop++;
                 if (drop > 0) t.History.RemoveRange(0, drop);
             }
-            foreach (var k in _bss.Where(kv => (now - kv.Value.Latest.SeenUtc).TotalSeconds > RemoveAfterSeconds).Select(kv => kv.Key).ToList())
+            // Never drop the AP we're connected to: without scans Windows may not re-list it for a while,
+            // and the Live tab's link details (width, clients, busy…) come from it.
+            ulong mine = _connection.Connected ? _connection.BssidKey : 0;
+            foreach (var k in _bss.Where(kv => kv.Key != mine && (now - kv.Value.Latest.SeenUtc).TotalSeconds > RemoveAfterSeconds).Select(kv => kv.Key).ToList())
                 _bss.Remove(k);
             snapshot = _bss.Values.Select(v => v.Latest).ToList();
         }

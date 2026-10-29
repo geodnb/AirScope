@@ -24,6 +24,7 @@ public sealed class BssRow : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
+    /// <param name="nowUtc">Reference time for staleness (the window passes the last scan time when scans are paused).</param>
     public void Update(BssInfo i, bool connected, DateTime nowUtc)
     {
         Info = i;

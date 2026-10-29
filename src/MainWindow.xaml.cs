@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings = AppSettings.Load();
     private WlanClient? _wlan;
     private WifiMonitor? _mon;
+    private RouterPinger? _pinger;
 
     private readonly ObservableCollection<BssRow> _rows = new();
     private readonly Dictionary<ulong, BssRow> _rowMap = new();
@@ -49,6 +50,15 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, TextBlock> _link = new();
     private readonly Dictionary<string, TextBlock> _det = new();
     private readonly List<LinkSample> _statWork = new();
+    private readonly List<LinkSample> _cleanWork = new();
+    private readonly List<ScanMark> _marksWork = new();
+    private readonly List<PingSample> _pingWork = new();
+    private double? _retryPeak;
+    private readonly List<LinkSample> _peakWork = new(), _peakClean = new();
+    private string _scanState = "";
+    private DateTime _lastActiveUtc = DateTime.UtcNow;
+    private DateTime _pingEvalUpTo = DateTime.MinValue, _lastPingEventUtc = DateTime.MinValue;
+    private readonly List<PingSample> _pending = new();   // unexplained spikes awaiting an event
 
     public MainWindow()
     {
@@ -79,6 +89,10 @@ public partial class MainWindow : Window
         PollBox.SelectedIndex = _settings.PollMs switch { <= 100 => 0, <= 250 => 1, <= 500 => 2, _ => 3 };
         ScanBox.ItemsSource = new[] { "3 s", "5 s", "10 s", "20 s", "30 s", "60 s" };
         ScanBox.SelectedIndex = _settings.ScanSeconds switch { <= 3 => 0, <= 5 => 1, <= 10 => 2, <= 20 => 3, <= 30 => 4, _ => 5 };
+        ScanModeBox.ItemsSource = new[] { "Auto — only while viewing networks", "Always — every interval", "Off — use Windows' own scans" };
+        ScanModeBox.SelectedIndex = (int)_settings.ScanMode;
+        PingCheck.IsChecked = _settings.PingRouter;
+        PingCard.Visibility = _settings.PingRouter ? Visibility.Visible : Visibility.Collapsed;
         SpotDuration.ItemsSource = new[] { "10 seconds", "30 seconds", "60 seconds", "2 minutes" };
         SpotDuration.SelectedIndex = 1;
         MiniTopCheck.IsChecked = _settings.MiniAlwaysOnTop;
@@ -99,6 +113,8 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => DarkTitleBar(this);
         Loaded += (_, _) => { _loading = false; Task.Run(OuiLookup.Warm); InitWlan(); _uiTimer.Start(); };
         Closing += OnClosing;
+        StateChanged += (_, _) => UpdateScanPolicy();
+        Activated += (_, _) => UpdateScanPolicy();
     }
 
     // ================================================================== startup
@@ -135,6 +151,10 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => { if (g == _gen && !_closed) AddEvent(ev); });
         };
         _mon.StatusChanged += s => _status = s;
+        Live.Scans = _mon.Scans;
+        var mon = _mon;
+        _pinger = new RouterPinger(() => mon.Connection.Connected);
+        _pinger.Sampled += p => { try { _logger?.WritePing(p); } catch { } };
 
         List<WlanInterfaceInfo> ifs;
         try { ifs = _wlan.GetInterfaces(); }
@@ -153,6 +173,7 @@ public partial class MainWindow : Window
         NoAdapterText.Text = msg;
         NoAdapterBanner.Visibility = Visibility.Visible;
         ScanNowBtn.IsEnabled = false;
+        PingCheck.IsEnabled = false;
     }
 
     private void StartMonitor()
@@ -166,7 +187,58 @@ public partial class MainWindow : Window
         _mon.Stop();                          // old loops finish (and queue their last callbacks) first…
         Interlocked.Increment(ref _gen);      // …which are then ignored as belonging to the old adapter
         _events.Clear();
+        _pinger?.Stop();
+        ResetPingEvents();
         _mon.Start(iface.Id);
+        if (_settings.PingRouter) { _pinger?.Start(iface.Id); Live.Pings = _pinger; }
+        UpdateScanPolicy();
+    }
+
+    // ================================================================== scan policy
+
+    /// <summary>
+    /// Decide whether AirScope may take the radio off-channel to scan. Scans cause brief RSSI dips, retry bursts
+    /// and latency spikes, so in Auto mode we only scan while a neighbour view is actually being looked at.
+    /// </summary>
+    private void UpdateScanPolicy()
+    {
+        if (_mon == null) return;
+        var now = DateTime.UtcNow;
+        if (IsActive) _lastActiveUtc = now;
+        bool onScreen = WindowState != WindowState.Minimized && IsVisible && _mini == null;
+        bool neighbourTab = Tabs.SelectedIndex is >= 1 and <= 4;
+        bool recentlyUsed = (now - _lastActiveUtc).TotalSeconds < 60;
+        bool active = _spot == null && _settings.ScanMode switch
+        {
+            ScanMode.Always => true,
+            ScanMode.Passive => false,
+            _ => onScreen && neighbourTab && recentlyUsed
+        };
+        _mon.ActiveScanning = active;
+        _scanState = _spot != null ? "scans paused for spot test" : _settings.ScanMode switch
+        {
+            ScanMode.Always => $"scanning every {_settings.ScanSeconds} s",
+            ScanMode.Passive => "scanning off (using Windows' scans)",
+            _ when active => $"auto: scanning every {_settings.ScanSeconds} s",
+            _ when _mini != null => "auto: scans paused in Mini mode",
+            _ when !onScreen => "auto: scans paused while minimised",
+            _ when !neighbourTab => "auto: scans paused on this tab",
+            _ => "auto: scans paused (window in background)"
+        };
+    }
+
+    /// <summary>
+    /// The time "how long since we saw it" is measured against. When nothing has scanned for a while (Auto on the Live
+    /// tab, or Off), an AP heard in the most recent scan isn't out of range just because that scan was a while ago.
+    /// </summary>
+    private DateTime FreshRef(DateTime now) =>
+        _mon?.LastScanUtc is DateTime t && t.AddSeconds(10) < now ? t.AddSeconds(10) : now;
+
+    private void ScanModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ScanModeBox.SelectedIndex < 0) return;
+        _settings.ScanMode = (ScanMode)ScanModeBox.SelectedIndex;
+        UpdateScanPolicy();
     }
 
     private void AdapterBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -212,7 +284,7 @@ public partial class MainWindow : Window
             ConnSsid.Text = "Not connected";
             ConnSub.Text = "";
             foreach (var tb in _link.Values) tb.Text = "—";
-            _mini?.Update(null, c, null);
+            _mini?.Update(null, c, null, null);
             return;
         }
 
@@ -241,7 +313,12 @@ public partial class MainWindow : Window
         _link["Rx link rate"].Text = $"{c.RxMbps:0} Mbps";
         _link["Tx link rate"].Text = $"{c.TxMbps:0} Mbps";
         _link["AP max PHY"].Text = ap?.MaxPhyMbps is double m ? $"{m:0} Mbps  ({(ap.Streams > 0 ? ap.Streams : 1)} stream{(ap.Streams > 1 ? "s" : "")})" : "—";
-        _link["Retries"].Text = s.RetryPct is double r ? $"{r:0.0}% of frames" : "not reported by driver";
+        _link["Retries"].Text = s.RetryAvgPct is double ra
+            ? $"{ra:0.0}% avg" + (_retryPeak is double pk && pk >= ra + 3 ? $" · peak {pk:0}%" : "")
+            : !s.CountersOk ? "not reported by driver"
+            : s.RetryPct is double && _mon.Scans.Overlaps(DateTime.UtcNow.AddSeconds(-11), DateTime.UtcNow) ? "scans too frequent for a clean figure"
+            : s.RetryPct is double r2 ? $"{r2:0.0}% of frames"
+            : "idle — too little traffic";
         _link["Windows signal"].Text = $"{c.SignalQuality}%";
         _link["AP clients"].Text = ap?.StationCount?.ToString(CultureInfo.InvariantCulture) ?? "not advertised";
         _link["Channel busy"].Text = ap?.ChannelUtilisation is double u ? $"{u * 100:0}%" : "not advertised";
@@ -255,17 +332,30 @@ public partial class MainWindow : Window
         {
             _lastStatsUtc = now;
             _mon.Samples.CopySince(now.AddSeconds(-Live.WindowSeconds), _statWork);
-            var st = Stats.Of(_statWork.Select(x => (double)x.Rssi).ToList());
+            // Readings taken while the radio was off-channel scanning say nothing about the link; leave them out.
+            _mon.Scans.CopySince(now.AddSeconds(-Live.WindowSeconds), now, _marksWork);
+            ScanTimeline.ExcludeCovered(_statWork, x => x.Utc, _marksWork, _cleanWork);
+            var use = _cleanWork.Count >= 10 || _cleanWork.Count * 2 >= _statWork.Count ? _cleanWork : _statWork;
+            bool excluded = use == _cleanWork && _cleanWork.Count < _statWork.Count;
+            var st = Stats.Of(use.Select(x => (double)x.Rssi).ToList());
             if (st.Count > 0)
             {
                 StatMin.Text = $"{st.Min:0}"; StatAvg.Text = $"{st.Avg:0.0}"; StatMax.Text = $"{st.Max:0}"; StatJit.Text = $"±{st.StdDev:0.0}";
-                StatNote.Text = st.Count < 10 ? "Collecting…" :
+                StatNote.Text = (st.Count < 10 ? "Collecting…" :
                     st.StdDev < 1.5 ? "Very steady signal." :
                     st.StdDev < 3 ? "Normal variation." :
                     st.StdDev < 5 ? "Fluctuating — movement, people, or interference nearby." :
-                    "Unstable — check antenna connections, interference, or adapter power saving.";
+                    "Unstable — check antenna connections, interference, or adapter power saving.")
+                    + (excluded ? " Moments when the radio was scanning are left out." : "");
             }
-            _mini?.Update(s, c, _statWork);
+            // Peak over a fixed minute, scan moments excluded (otherwise it's nearly always a scan burst).
+            _retryPeak = null;
+            _mon.Samples.CopySince(now.AddSeconds(-60), _peakWork);
+            _mon.Scans.CopySince(now.AddSeconds(-62), now, _marksWork);
+            ScanTimeline.ExcludeCovered(_peakWork, x => x.Utc, _marksWork, _peakClean);
+            foreach (var x in _peakClean)
+                if (x.RetryPct is double rp && (_retryPeak is not double cur || rp > cur)) _retryPeak = rp;
+            _mini?.Update(s, c, _statWork, MiniPingText(now));
         }
     }
 
@@ -295,7 +385,7 @@ public partial class MainWindow : Window
                 _rowMap[b.Key] = row;
                 _rows.Add(row);
             }
-            row.Update(b, _conn.Connected && b.Key == _conn.BssidKey, now);
+            row.Update(b, _conn.Connected && b.Key == _conn.BssidKey, FreshRef(now));
         }
         foreach (var gone in _rowMap.Keys.Where(k => !present.Contains(k)).ToList())
         {
@@ -335,6 +425,7 @@ public partial class MainWindow : Window
     {
         if (e.OriginalSource != Tabs || _loading) return;
         RefreshVisibleTab();
+        UpdateScanPolicy();
     }
 
     // ================================================================== networks grid
@@ -466,7 +557,7 @@ public partial class MainWindow : Window
     {
         if (_mon == null) return;
         Hist.WindowMinutes = H5.IsChecked == true ? 5 : H30.IsChecked == true ? 30 : 10;
-        var active = _scan.Where(b => (DateTime.UtcNow - b.SeenUtc).TotalSeconds < 60).ToList();
+        var active = _scan.Where(b => (FreshRef(DateTime.UtcNow) - b.SeenUtc).TotalSeconds < 60).ToList();
         List<BssInfo> pick;
         bool byIndex = false;
         if (HMine.IsChecked == true && _conn.Connected)
@@ -504,7 +595,7 @@ public partial class MainWindow : Window
         if (_mon == null) return;
         AdvisorPanel.Children.Clear();
         var mine = _conn.Connected ? _mon.GetBss(_conn.BssidKey) : null;
-        var active = _scan.Where(b => (DateTime.UtcNow - b.SeenUtc).TotalSeconds < 45).ToList();
+        var active = _scan.Where(b => (FreshRef(DateTime.UtcNow) - b.SeenUtc).TotalSeconds < 45).ToList();
         var pool = _settings.ExcludeOwnInAdvisor ? ChannelAdvisor.ExcludeOwn(active, mine, _conn.Connected ? _conn.Ssid : null).ToList() : active;
         if (!_settings.ExcludeOwnInAdvisor && mine != null) pool = pool.Where(b => b.Key != mine.Key).ToList();
 
@@ -623,12 +714,15 @@ public partial class MainWindow : Window
     {
         if (_closed) return;
         var now = DateTime.UtcNow;
-        foreach (var r in _rows) r.Tick(now);
+        var fresh = FreshRef(now);
+        foreach (var r in _rows) r.Tick(fresh);
         if (NetGrid.SelectedItem is BssRow sel) _det["Last seen"].Text = sel.LastSeen;
 
-        string scanAge = _mon?.LastScanUtc is DateTime t ? $"last scan {(now - t).TotalSeconds:0}s ago" : "no scan yet";
+        UpdateScanPolicy();
+        string scanAge = _mon?.LastScanUtc is DateTime t ? $"last scan {FormatSpan(now - t)} ago" : "no scan yet";
         StatusLeft.Text = _status;
-        StatusRight.Text = $"{scanAge} · live {_settings.PollMs} ms · scan every {_settings.ScanSeconds} s";
+        StatusRight.Text = $"{scanAge} · live {_settings.PollMs} ms" + (_scanState.Length > 0 ? " · " + _scanState : "");
+        UpdatePing(now);
 
         if (_logger != null)
             RecText.Text = $"Recording {FormatSpan(DateTime.Now - _logger.StartedLocal)} · {_logger.Rows:N0} rows";
@@ -674,7 +768,8 @@ public partial class MainWindow : Window
             var l = _logger; _logger = null;
             l.Dispose();
             RecText.Text = "Record";
-            AddEvent(new EventEntry { Kind = EventKind.Info, Text = $"Saved {Path.GetFileName(l.LinkPath)} and {Path.GetFileName(l.ScanPath)}" });
+            AddEvent(new EventEntry { Kind = EventKind.Info, Text = $"Saved {Path.GetFileName(l.LinkPath)} and {Path.GetFileName(l.ScanPath)}" +
+                (File.Exists(l.PingPath) ? $" and {Path.GetFileName(l.PingPath)}" : "") });
         }
     }
 
@@ -688,12 +783,14 @@ public partial class MainWindow : Window
             {
                 _mini = null;
                 if (_closed) return;
+                UpdateScanPolicy();
                 if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
                 Activate();
             };
             _mini.Closed += _miniClosedHandler;
             _mini.Show();
             WindowState = WindowState.Minimized;
+            UpdateScanPolicy();
         }
         else _mini.Activate();
     }
@@ -706,6 +803,7 @@ public partial class MainWindow : Window
     private void ScanBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _settings.ScanSeconds = ScanBox.SelectedIndex switch { 0 => 3, 1 => 5, 2 => 10, 3 => 20, 4 => 30, _ => 60 };
+        UpdateScanPolicy();
     }
 
     private void MiniTop_Click(object sender, RoutedEventArgs e)
@@ -734,6 +832,25 @@ public partial class MainWindow : Window
     private void RatesCheck_Click(object sender, RoutedEventArgs e)
     {
         Live.ShowRates = _settings.ShowRates = RatesCheck.IsChecked == true;
+        Live.InvalidateVisual();
+    }
+
+    private void PingCheck_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.PingRouter = PingCheck.IsChecked == true;
+        PingCard.Visibility = _settings.PingRouter ? Visibility.Visible : Visibility.Collapsed;
+        ResetPingEvents();
+        if (_settings.PingRouter && _pinger != null && _mon != null && _mon.InterfaceId != Guid.Empty)
+        {
+            _pinger.Start(_mon.InterfaceId);
+            Live.Pings = _pinger;
+        }
+        else
+        {
+            Live.Pings = null;
+            _pinger?.Stop();
+        }
+        Live.MarkDirty();
         Live.InvalidateVisual();
     }
 
@@ -777,6 +894,8 @@ public partial class MainWindow : Window
             SpotRun.Content = "Start test";
             SpotStatus.Text = "Cancelled";
             SpotProgress.Width = 0;
+            UpdateScanPolicy();
+            ScanNowBtn.IsEnabled = _mon != null;
             return;
         }
         if (!_conn.Connected) { SpotStatus.Text = "Connect to a network first."; return; }
@@ -784,6 +903,8 @@ public partial class MainWindow : Window
         _spot = new SpotTestRunner(SpotLabel.Text, secs);
         SpotRun.Content = "Cancel";
         SpotStatus.Text = "Measuring…";
+        UpdateScanPolicy();   // no scans during a test, so they can't skew it
+        ScanNowBtn.IsEnabled = false;
     }
 
     private void FinishSpot()
@@ -792,8 +913,27 @@ public partial class MainWindow : Window
         _spot = null;
         SpotRun.Content = "Start test";
         SpotProgress.Width = 0;
-        var res = runner?.Finish(_mon?.GetBss(_conn.BssidKey));
+        UpdateScanPolicy();
+        ScanNowBtn.IsEnabled = _mon != null;
+        if (runner != null && _mon != null) _mon.Scans.CopySince(runner.StartUtc.AddSeconds(-10), DateTime.UtcNow, _marksWork);
+        else _marksWork.Clear();
+        var res = runner?.Finish(_mon?.GetBss(_conn.BssidKey), _marksWork);
         if (res == null) { SpotStatus.Text = "No samples collected (were you disconnected?)"; return; }
+        if (runner != null && _pinger != null && _settings.PingRouter)
+        {
+            _pinger.CopySince(runner.StartUtc, _pingWork);
+            _pingWork.RemoveAll(p => p.Utc > runner.StartUtc.AddSeconds(runner.Seconds));
+            // Only if ping ran for (nearly) the whole test – judged by time, since lost pings take longer than replies.
+            bool covered = _pingWork.Count >= 3 &&
+                (_pingWork[0].Utc - runner.StartUtc).TotalSeconds <= 3 &&
+                (runner.StartUtc.AddSeconds(runner.Seconds) - _pingWork[^1].Utc).TotalSeconds <= 3 &&
+                _pingWork.Zip(_pingWork.Skip(1)).All(x => (x.Second.Utc - x.First.Utc).TotalSeconds <= 3);
+            if (covered)
+            {
+                var ps = PingStats.Of(_pingWork);
+                res.PingAvg = ps.Avg; res.PingP95 = ps.P95; res.PingLossPct = ps.LossPct;
+            }
+        }
         if (!_spots.Any(s => s.IsBaseline)) res.IsBaseline = true;
         _spots.Insert(0, res);
         RecomputeSpotDeltas();
@@ -837,16 +977,104 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.SaveFileDialog { FileName = $"airscope-spot-tests-{DateTime.Now:yyyyMMdd}.csv", Filter = "CSV|*.csv" };
         if (dlg.ShowDialog(this) != true) return;
-        var sb = new StringBuilder("label,taken,ssid,bssid,band,channel,seconds,samples,rssi_avg,rssi_min,rssi_max,rssi_stddev,tx_avg_mbps,rx_avg_mbps,retry_pct,roams,baseline\n");
+        var sb = new StringBuilder("label,taken,ssid,bssid,band,channel,seconds,samples,rssi_avg,rssi_min,rssi_max,rssi_stddev,tx_avg_mbps,rx_avg_mbps,retry_pct,roams,ping_avg_ms,ping_p95_ms,ping_loss_pct,baseline\n");
         foreach (var s in _spots)
             sb.AppendLine(string.Join(",", CsvLogger.Esc(s.Label), s.TakenLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                CsvLogger.Esc(s.Ssid), s.Bssid, s.Band, s.Channel, s.Seconds, s.Samples,
+                CsvLogger.Esc(s.Ssid), CsvLogger.Esc(s.Bssid), CsvLogger.Esc(s.Band), s.Channel, s.Seconds, s.Samples,
                 F(s.RssiAvg), F(s.RssiMin), F(s.RssiMax), F(s.RssiStdDev), F(s.TxAvg), F(s.RxAvg),
-                s.RetryAvg is double r ? F(r) : "", s.Roams, s.IsBaseline ? "yes" : ""));
+                s.RetryAvg is double r ? F(r) : "", s.Roams,
+                s.PingAvg is double pa ? F(pa) : "", s.PingP95 is double pp ? F(pp) : "", s.PingLossPct is double pl ? F(pl) : "",
+                s.IsBaseline ? "yes" : ""));
         try { File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true)); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "AirScope", MessageBoxButton.OK, MessageBoxImage.Warning); }
 
         static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    // ================================================================== router ping
+
+    private string? MiniPingText(DateTime now)
+    {
+        if (!_settings.PingRouter || _pinger?.Last is not PingSample p || (now - p.Utc).TotalSeconds > 3) return null;
+        return p.Ms is double ms ? $"{PingStats.Ms(ms)} ms" : "ping lost";
+    }
+
+    private void ResetPingEvents()
+    {
+        _pingEvalUpTo = DateTime.UtcNow;
+        _pending.Clear();
+    }
+
+    private static bool IsSpike(PingSample p, double threshold) => p.Ms is not double ms || ms >= threshold;
+
+    private readonly List<PingSample> _spikeWork = new(), _spikeClean = new();
+
+    /// <summary>Once a second: refresh the ping card, and report latency spikes that weren't caused by a scan.</summary>
+    private void UpdatePing(DateTime now)
+    {
+        if (!_settings.PingRouter) return;
+        if (_pinger == null || _mon == null) { PingNote.Text = "The Windows Wi-Fi API isn't available, so there's no adapter to ping through."; return; }
+
+        var status = _pinger.Current;
+        _pinger.CopySince(now.AddSeconds(-Live.WindowSeconds), _pingWork);
+        var st = PingStats.Of(_pingWork);
+        // One spike threshold everywhere (card, graph strip, events): 50 ms, or 3× the recent median on slower links.
+        var okMs = _pingWork.Where(p => p.Ms.HasValue && p.Utc >= now.AddSeconds(-60)).Select(p => p.Ms!.Value).OrderBy(x => x).ToList();
+        double median = okMs.Count > 0 ? okMs[okMs.Count / 2] : 0;
+        double threshold = Math.Max(50, median * 3);
+        Live.PingSpikeMs = threshold;
+
+        var last = _pinger.Last;
+        PingNow.Text = last is PingSample l && (now - l.Utc).TotalSeconds < 3 ? (l.Ms is double m ? PingStats.Ms(m) : "lost") : "—";
+        PingAvg.Text = PingStats.Ms(st.Avg);
+        PingP95.Text = PingStats.Ms(st.P95);
+        PingLoss.Text = st.Sent == 0 ? "—" : $"{st.LossPct:0.#}%";
+        PingHeader.ToolTip = status.Target is { } ip ? $"Pinging {ip} (this adapter's default gateway)" : null;
+        var recent = _pingWork.Where(p => p.Utc >= now.AddSeconds(-60)).Select(p => p.Ms ?? Math.Max(threshold, 100)).ToList();
+        PingSpark.Max = Math.Max(20, recent.Count > 0 ? recent.Max() : 20);
+        PingSpark.SetPoints(recent);
+
+        // Which spikes happened during scans? One sweep over both time-ordered lists.
+        _spikeWork.Clear();
+        foreach (var p in _pingWork) if (IsSpike(p, threshold)) _spikeWork.Add(p);
+        _mon.Scans.CopySince(now.AddSeconds(-Live.WindowSeconds - 10), now, _marksWork);
+        ScanTimeline.ExcludeCovered(_spikeWork, p => p.Utc, _marksWork, _spikeClean);
+        int spikes = _spikeWork.Count, notScan = _spikeClean.Count, inScan = spikes - notScan;
+
+        string sharedNote = status.SharedSubnet ? " Another adapter (e.g. Ethernet) is on the same network, so Windows may be sending these pings over it rather than Wi-Fi." : "";
+        PingNote.Text = !_conn.Connected ? "Not connected." :
+            status.Error != null ? "Ping error: " + status.Error :
+            status.Target == null ? "No router address on this Wi-Fi adapter's network yet." :
+            status.NoReplies ? "Your router doesn't answer pings, so latency can't be measured this way. (Pinging slowly in case that changes.)" :
+            st.Sent < 5 ? "Collecting…" :
+            (spikes == 0 ? $"No pings over {threshold:0} ms or lost in this window." :
+             notScan == 0 ? $"{spikes} slow/lost ping{(spikes > 1 ? "s" : "")}, all during scans." :
+             $"{spikes} slow (≥{threshold:0} ms) or lost ping{(spikes > 1 ? "s" : "")}: {inScan} during scans, {notScan} not.") + sharedNote;
+
+        // Events only for spikes a scan doesn't explain. Judged a few seconds late, because Windows only reports
+        // its own scans when they finish. A single lost ping on its own isn't worth an event.
+        var evalTo = now - _mon.Scans.ExternalLead - TimeSpan.FromSeconds(1);
+        if (evalTo > _pingEvalUpTo)
+        {
+            // Until the router has answered once, losses mean "doesn't answer pings", not a bad link.
+            if (status.AnyReply && !status.NoReplies)
+                foreach (var p in _spikeClean)
+                    if (p.Utc > _pingEvalUpTo && p.Utc <= evalTo) _pending.Add(p);
+            _pingEvalUpTo = evalTo;
+        }
+        if (!status.AnyReply || status.NoReplies) _pending.Clear();
+        _pending.RemoveAll(p => p.Utc < now.AddSeconds(-90));   // only spikes close together add up
+        int pSlow = _pending.Count(p => p.Ms.HasValue), pLost = _pending.Count - pSlow;
+        if ((pSlow > 0 || pLost >= 2) && (now - _lastPingEventUtc).TotalSeconds >= 60)
+        {
+            double worst = _pending.Where(p => p.Ms.HasValue).Select(p => p.Ms!.Value).DefaultIfEmpty(0).Max();
+            var parts = new List<string>();
+            if (pSlow > 0) parts.Add(pSlow == 1 ? $"one at {worst:0} ms" : $"{pSlow} slow, worst {worst:0} ms");
+            if (pLost > 0) parts.Add($"{pLost} lost");
+            AddEvent(new EventEntry { Kind = EventKind.Warning, Text = $"Router ping spikes with no scan running: {string.Join(", ", parts)}" });
+            _lastPingEventUtc = now;
+            _pending.Clear();
+        }
     }
 
     // ================================================================== helpers / shutdown
@@ -876,6 +1104,7 @@ public partial class MainWindow : Window
             _mini.Close();
         }
         _settings.Save();
+        _pinger?.Dispose();
         _mon?.Dispose();
         var lg = _logger; _logger = null; lg?.Dispose();
         _wlan?.Dispose();
