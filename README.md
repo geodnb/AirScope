@@ -2,6 +2,14 @@
 
 **A fast, modern, read-only Wi-Fi analyser for Windows 10 and 11.**
 
+<p>
+  <a href="https://github.com/geodnb/AirScope/releases/latest/download/AirScope.exe"><img alt="Download AirScope.exe" src="https://img.shields.io/badge/Download-AirScope.exe-3DD6C6?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://github.com/geodnb/AirScope/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/geodnb/AirScope?style=for-the-badge&label=Latest&color=2A313C"></a>
+  <a href="LICENSE.md"><img alt="Licence: PolyForm Noncommercial" src="https://img.shields.io/badge/Licence-PolyForm%20Noncommercial-2A313C?style=for-the-badge"></a>
+</p>
+
+> **[⬇ Download AirScope.exe](https://github.com/geodnb/AirScope/releases/latest/download/AirScope.exe)** — single portable file, no installer, no admin rights. &nbsp;·&nbsp; [All releases](https://github.com/geodnb/AirScope/releases)
+
 AirScope shows you what your Wi-Fi is really doing: a live, smooth signal graph for your own connection, every nearby network with its true channel width and Wi-Fi generation, a channel advisor that understands UK rules, and timed spot tests for fair before/after comparisons.
 
 It was built as a better alternative to the WiFi Analyzer app commonly used on Windows, which can feel laggy, basic and unreliable.
@@ -168,7 +176,7 @@ Press **Record** to log every live sample and every scan to CSV files in `Docume
 
 ## Getting started
 
-1. Download `AirScope.exe` and put it in any folder you like.
+1. [Download `AirScope.exe`](https://github.com/geodnb/AirScope/releases/latest/download/AirScope.exe) from the [latest release](https://github.com/geodnb/AirScope/releases/latest) and put it in any folder you like.
 2. Double-click it. No installation or admin rights are needed.
 3. **First run:** because the exe isn't code-signed, Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
 4. If you have more than one Wi-Fi adapter, choose the one you want from the drop-down at the top.
@@ -257,23 +265,27 @@ To remove AirScope completely, delete the exe and these two folders.
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```powershell
+git clone https://github.com/geodnb/AirScope.git
+cd AirScope\src
+
 # Run from source
 dotnet run -c Release
 
 # Build a single, self-contained AirScope.exe (no .NET install needed to run it)
 dotnet publish -c Release -r win-x64
-# Output: bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\AirScope.exe
+# Output: src\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\AirScope.exe
 ```
 
 **Project layout**
 
 | Folder | Contents |
 |---|---|
-| `Interop/` | Calls into the Windows Native Wi-Fi API. |
-| `Core/` | Monitoring engine, beacon parser, channel maths, advisor, logging, spot tests, settings. |
-| `UI/` | Custom-drawn graphs and controls. |
-| `Themes/` | Dark theme. |
-| `Resources/` | Compressed IEEE manufacturer database. |
+| `src/Interop/` | Calls into the Windows Native Wi-Fi API. |
+| `src/Core/` | Monitoring engine, beacon parser, channel maths, advisor, logging, spot tests, settings. |
+| `src/UI/` | Custom-drawn graphs and controls. |
+| `src/Themes/` | Dark theme. |
+| `src/Resources/` | Compressed IEEE manufacturer database. |
+| `src/*.xaml` | Main and mini windows. |
 
 ---
 
