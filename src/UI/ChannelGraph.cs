@@ -120,7 +120,7 @@ public sealed class ChannelGraph : FrameworkElement
             bool mine = b.Key == _connected;
             bool hl = _highlight.Contains(b.Key) || hover == b;
             double dim = anyHighlight && !hl && !mine ? 0.25 : 1.0;
-            var col = Palette.ForName(b.DisplaySsid);
+            var col = Palette.ForName(b.ColorKey);
             double x0 = X(b.LowFreq), x1 = X(b.HighFreq), yTop = Y(b.Rssi), yBot = _plot.Bottom;
             double edge = Math.Min((x1 - x0) * 0.18, 14);
 
@@ -154,7 +154,7 @@ public sealed class ChannelGraph : FrameworkElement
         {
             var under = HitTest(m).Take(4).ToList();
             var txt = string.Join("\n\n", under.Select(b =>
-                $"{b.DisplaySsid}  {b.Rssi} dBm\nch {b.Channel} · {b.WidthLabel} MHz · {b.GenLabel}\n{b.Bssid}  {b.Vendor}"));
+                $"{b.DisplaySsid}  {b.Rssi} dBm\nch {b.Channel} · {b.WidthLabel} MHz · {b.GenLabel}\n{b.DisplayBssid}  {b.Vendor}"));
             LiveGraph.DrawTip(dc, txt, m, new Rect(0, 0, w, h), dpi);
         }
     }

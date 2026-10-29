@@ -25,6 +25,7 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 - **Gaming-friendly scanning**: by default AirScope only scans for neighbours while you're looking at them, so it won't cause lag spikes while you play.
 - **Scan-aware graphs**: scan periods are shaded, so you can tell a real signal problem from a scan glitch.
 - **Optional router ping**: see real latency and packet loss, and whether each spike was caused by a scan.
+- **Screenshot mode**: hides network names and router addresses on screen, so you can share screenshots safely.
 - **Mini mode**: a small always-on-top signal monitor.
 - **CSV recording** of everything it sees.
 - **No admin rights, no internet access, no telemetry, no changes to your PC.**
@@ -36,7 +37,7 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 ## Contents
 
 - [Highlights](#highlights)
-- [What's new in 1.1](#whats-new-in-11)
+- [What's new](#whats-new)
 - [Features](#features)
 - [How it improves on the usual Windows Wi-Fi analyser](#how-it-improves-on-the-usual-windows-wi-fi-analyser)
 - [Getting started](#getting-started)
@@ -50,7 +51,16 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 - [Disclaimer](#disclaimer)
 ---
 
-## What's new in 1.1
+## What's new
+
+### 1.2
+
+- **Clear button** on the live graph: starts the graph and its signal, retry and ping statistics afresh. Handy before a speed test or an antenna change. Events and recordings are kept.
+- **Retries that make sense on an idle PC.** When your PC is barely using the network, a couple of retried frames can look like 30–40%. AirScope now shows "≈x% · light traffic" when there's too little traffic for a reliable figure, only counts busy seconds towards the peak, and weights spot-test retries by traffic. Hover over the graph to see how many frames each reading is based on.
+- **Screenshot mode** (Settings ⚙): replaces network names and router addresses everywhere on screen with stand-ins like "My network" and "AP 1", so you can post screenshots without revealing where you are. Recordings keep the real values.
+- The status bar now says when the network list comes from Windows' own scans rather than AirScope's.
+
+### 1.1
 
 - **No more scan lag by default.** In 1.0, AirScope scanned for neighbouring networks every 10 seconds whatever you were looking at. Each scan briefly takes the adapter off your channel, which showed up as regular signal dips, retry spikes and latency spikes. The new **Auto** mode only scans while Networks, Channels, History or Advisor is on screen. See [Scans and gaming](#scans-and-gaming).
 - **Scan shading** on the live graph: blue for AirScope's own scans, amber for scans by Windows or other apps. Readings taken during scans are left out of the signal statistics and drop alerts.
@@ -74,8 +84,9 @@ Your current connection, in real time.
 - **Hover** anywhere on the graph to read the exact signal, rates and time at that moment. **Pause** freezes the graph so you can inspect it.
 - **Long windows stay honest.** When zoomed out, a faint shaded band shows the minimum and maximum in each slice, so brief drops aren't averaged away.
 - **Scan shading.** Moments when the adapter was off-channel scanning are shaded: blue for AirScope's own scans, amber for scans by Windows or other apps. Hovering over a point tells you if it was taken during a scan.
+- **Clear** starts the graph and its statistics afresh, for example just before a speed test.
 - **Signal statistics** over the chosen window: minimum, average, maximum and jitter (how much the signal wobbles), with a plain-English verdict. Readings taken during scans are left out, because they say nothing about your link.
-- **Link details**: network, access point address (BSSID) and manufacturer, band and channel (with DFS flagged), channel width, Wi-Fi standard, security and encryption, protected management frames, the access point's theoretical top speed and antenna streams, retry rate (a 10-second average with scans excluded, plus the recent peak), client count and channel busyness (when the router advertises them), access point uptime, BSS colour, country code, and how long you've been connected.
+- **Link details**: network, access point address (BSSID) and manufacturer, band and channel (with DFS flagged), channel width, Wi-Fi standard, security and encryption, protected management frames, the access point's theoretical top speed and antenna streams, retry rate (a 10-second average with scans excluded, plus the recent peak; marked "light traffic" when there's too little traffic to be reliable), client count and channel busyness (when the router advertises them), access point uptime, BSS colour, country code, and how long you've been connected.
 
 ### Router ping
 
@@ -184,7 +195,7 @@ Handy on a second monitor or while gaming.
 
 ### Recording
 
-Press **Record** to log every live sample and every scan to CSV files in `Documents\AirScope\Logs`. With Router ping on, every ping (including lost ones) goes to a third file. The live-sample log has an `own_scan` column marking samples taken during AirScope's own scans. The files open in Excel or any spreadsheet. Network names are escaped so they can't be interpreted as spreadsheet formulas.
+Press **Record** to log every live sample and every scan to CSV files in `Documents\AirScope\Logs`. With Router ping on, every ping (including lost ones) goes to a third file. The live-sample log has an `own_scan` column marking samples taken during AirScope's own scans, and a `tx_frames` column showing how many frames each retry figure is based on. The files open in Excel or any spreadsheet. Network names are escaped so they can't be interpreted as spreadsheet formulas.
 
 ---
 
@@ -237,6 +248,7 @@ Open with the ⚙ button.
 | Neighbour scan interval | 3 – 60 s (default 10 s) | How often to scan when scanning is allowed. |
 | When to scan | Auto (default), Always, Off | See [Scans and gaming](#scans-and-gaming). |
 | Mini window stays on top | On / Off | |
+| Screenshot mode | On / Off (default) | Hides network names and router addresses (BSSIDs) on screen with stand-ins like "My network" and "AP 1". Recordings keep the real values. |
 | Router ping | On / Off (default) | The checkbox above the live graph. |
 
 Settings are saved automatically.
@@ -281,7 +293,7 @@ To remove AirScope completely, delete the exe and these two folders.
 - **"AP max" is theoretical.** It's calculated from what the access point advertises (generation × channel width × streams). Your actual link speed is also limited by your own adapter, distance and interference, and real-world throughput is much lower than the link rate.
 - **Noise floor and SNR aren't available.** Windows doesn't expose them to apps.
 - **Clients and channel busyness** only appear when the router includes that information in its beacons. Many home routers don't.
-- **Retry rate** depends on the driver reporting frame statistics. Some don't, in which case it shows "not reported by driver". On a quiet link it may show "idle", because there's too little traffic to measure. Around 5–15% retries is normal on a healthy Wi-Fi 6 connection, even with a strong signal.
+- **Retry rate** depends on the driver reporting frame statistics. Some don't, in which case it shows "not reported by driver". On a quiet link it shows "light traffic" or "idle", because a few retried frames out of a few dozen look like a big percentage. For a meaningful figure, check it while the connection is busy (a download or speed test). Around 5–15% retries under load is normal on a healthy Wi-Fi 6 connection, and under 2% is excellent.
 - **Not every scan can be shown.** Scans by Windows and other apps are only reported when they finish, so their start time is estimated. Roaming scans run by the driver itself aren't reported at all.
 - **Router ping is a guide.** Routers answer pings at low priority, so an occasional spike can be the router being busy rather than your Wi-Fi.
 - **The channel advisor is a guide, not a guarantee.** It only sees networks your PC can hear from where it sits, not what your router hears, and it can't detect non-Wi-Fi interference (microwaves, Bluetooth, baby monitors and so on).
@@ -313,6 +325,8 @@ To remove AirScope completely, delete the exe and these two folders.
 | SmartScreen blocks the exe | Click **More info**, then **Run anyway**. |
 | Can't replace the exe with a new version | AirScope may still be running. Close it, or end it in Task Manager. |
 | Few or no neighbour networks | Open the Networks or Channels tab (in Auto mode AirScope only scans while those are on screen), or press **Scan now**. Some adapters return fewer results while busy. |
+| Retries look high when the PC is idle | That's normal: with little traffic, a few retries make a big percentage. AirScope marks this as "light traffic". Check retries during a download or speed test instead. |
+| Sharing a screenshot | Turn on **Screenshot mode** in Settings first, so your network name and router address aren't visible. |
 | Lag spikes while gaming | Use Auto (the default) or Off under **When to scan**, and keep AirScope on the Live tab or in Mini mode. Turn on Router ping to see whether spikes line up with scans. |
 | Router ping says your router doesn't answer pings | Some routers ignore pings. AirScope slows to one ping every 5 seconds in case that changes; latency can't be measured this way on that router. |
 | Something else goes wrong | AirScope shows the cause and saves details to `%AppData%\AirScope\error.log`. Include that file when reporting a problem. |

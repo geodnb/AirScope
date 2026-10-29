@@ -38,6 +38,7 @@ public sealed class WifiMonitor : IDisposable
     private volatile bool _activeWanted;
     private int _forceScan;                                 // 1 = "Scan now" pressed
     private int _cacheDirty;                                // 1 = Windows refreshed its scan list since we last read it
+    private int _resetLive;                                 // 1 = graph "Clear" pressed; poll loop drops its rolling state
     private long _lastOwnScanTick = long.MinValue / 2;      // Environment.TickCount64 (monotonic); scan loop only
     private static readonly TimeSpan MinOwnScanGap = TimeSpan.FromSeconds(3);
 
@@ -96,6 +97,17 @@ public sealed class WifiMonitor : IDisposable
         _pollTask = _scanTask = null;
     }
 
+    /// <summary>
+    /// Start the live picture afresh (graph "Clear"): drops the sample history, past scan shading and the rolling
+    /// retry window. Doesn't touch the connection, events, neighbour list or a scan in progress.
+    /// </summary>
+    public void ResetLive()
+    {
+        Samples.Clear();
+        Scans.ClearMarks();
+        Interlocked.Exchange(ref _resetLive, 1);
+    }
+
     /// <summary>Trigger a scan right now (even in passive mode) instead of waiting for the next interval.</summary>
     public void ScanNow()
     {
@@ -130,6 +142,7 @@ public sealed class WifiMonitor : IDisposable
         public ConnectionInfo? PrevConn;
         public (ulong tx, ulong retry)? PrevCounters;
         public double? RetryPct, RetryAvg;
+        public int RetryFrames, RetryAvgFrames;
         public DateTime RetryPctUtc;
         public readonly Queue<(DateTime start, DateTime end, ulong dTx, ulong dRe)> RetryWin = new();
         public readonly List<LinkSample> Clean = new();
@@ -180,6 +193,10 @@ public sealed class WifiMonitor : IDisposable
     private void PollOnce(Guid iface, PollState st, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
+        if (Interlocked.Exchange(ref _resetLive, 0) == 1)
+        {
+            st.RetryWin.Clear(); st.RetryPct = null; st.RetryAvg = null; st.RetryFrames = st.RetryAvgFrames = 0;
+        }
         // Connection attributes change slowly; refresh them at ≤4 Hz.
         if ((now - st.LastConnQueryUtc).TotalMilliseconds >= 240 || st.PrevConn == null)
         {
@@ -194,7 +211,7 @@ public sealed class WifiMonitor : IDisposable
         var conn = _connection;
         if (!conn.Connected)
         {
-            st.PrevCounters = null; st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear();
+            st.PrevCounters = null; st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.RetryFrames = st.RetryAvgFrames = 0;
             if (!ct.IsCancellationRequested) SampleTaken?.Invoke(new LinkSample(now, -100, 0, 0, null), conn);
             return;
         }
@@ -211,20 +228,21 @@ public sealed class WifiMonitor : IDisposable
                 if (st.PrevCounters is { } p && k.tx >= p.tx && k.retry >= p.retry)
                 {
                     ulong dTx = k.tx - p.tx, dRe = k.retry - p.retry;
-                    if (dTx >= 20) { st.RetryPct = Math.Min(100, 100.0 * dRe / dTx); st.RetryPctUtc = now; }
+                    if (dTx >= 20) { st.RetryPct = Math.Min(100, 100.0 * dRe / dTx); st.RetryPctUtc = now; st.RetryFrames = (int)Math.Min(int.MaxValue, dTx); }
                     else if ((now - st.RetryPctUtc).TotalSeconds > 5) st.RetryPct = null;   // idle link: don't hold a stale figure forever
                     st.RetryWin.Enqueue((from, now, dTx, dRe));
                     while (st.RetryWin.Count > 10) st.RetryWin.Dequeue();   // ~10 s; by count so clock changes can't break it
-                    st.RetryAvg = RollingRetry(st.RetryWin);
+                    (st.RetryAvg, st.RetryAvgFrames) = RollingRetry(st.RetryWin);
                 }
                 else st.RetryWin.Clear();   // first read, or counters reset (reconnect / driver restart)
                 st.PrevCounters = (k.tx, k.retry);
             }
-            else { st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.PrevCounters = null; }
+            else { st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.PrevCounters = null; st.RetryFrames = st.RetryAvgFrames = 0; }
         }
 
         if (ct.IsCancellationRequested) return;
-        var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct, st.RetryAvg, Scans.OwnActive(now), st.PrevCounters != null);
+        var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct, st.RetryAvg, Scans.OwnActive(now), st.PrevCounters != null,
+            st.RetryPct != null ? st.RetryFrames : 0, st.RetryAvgFrames);
         Samples.Add(s);
         DetectSignalDrop(st, now);
         SampleTaken?.Invoke(s, conn);
@@ -235,12 +253,13 @@ public sealed class WifiMonitor : IDisposable
     /// not when each second was recorded, so Windows' scans (reported only when they finish) drop out once known.
     /// Null when there isn't enough scan-free traffic to say.
     /// </summary>
-    private double? RollingRetry(IEnumerable<(DateTime start, DateTime end, ulong dTx, ulong dRe)> win)
+    private (double? pct, int frames) RollingRetry(IEnumerable<(DateTime start, DateTime end, ulong dTx, ulong dRe)> win)
     {
         ulong tx = 0, re = 0;
         foreach (var w in win)
             if (!Scans.Overlaps(w.start, w.end)) { tx += w.dTx; re += w.dRe; }
-        return tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null;
+        int frames = (int)Math.Min(int.MaxValue, tx);
+        return (tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null, frames);
     }
 
     private static ConnectionInfo CopyWithChannel(ConnectionInfo c, int ch) => new()
@@ -511,7 +530,8 @@ public sealed class WifiMonitor : IDisposable
                 _bss.Remove(k);
             snapshot = _bss.Values.Select(v => v.Latest).ToList();
         }
-        StatusChanged?.Invoke($"{snapshot.Count} access points");
+        int n = snapshot.Count;
+        StatusChanged?.Invoke($"{n} access point{(n == 1 ? "" : "s")}" + (_activeWanted ? "" : " · from Windows' own scans (open Networks to scan)"));
         ScanCompleted?.Invoke(snapshot, 0);
     }
 

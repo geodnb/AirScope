@@ -39,7 +39,11 @@ public sealed class BssInfo
 
     public double LowFreq => CenterFreqMHz - WidthMHz / 2.0;
     public double HighFreq => CenterFreqMHz + WidthMHz / 2.0;
-    public string DisplaySsid => Hidden ? "‹hidden›" : Ssid;
+    /// <summary>Name for display (masked in screenshot mode). Logs and comparisons use <see cref="Ssid"/>.</summary>
+    public string DisplaySsid => Privacy.Name(Ssid, Hidden);
+    /// <summary>Stable key for colour-coding, so colours don't change when screenshot mode is toggled.</summary>
+    public string ColorKey => Hidden ? "‹hidden›" : Ssid;
+    public string DisplayBssid => Privacy.Mac(Bssid);
     public string GenLabel => Generation switch { 7 => "Wi-Fi 7", 6 => "Wi-Fi 6", 5 => "Wi-Fi 5", 4 => "Wi-Fi 4", _ => "Legacy" };
 }
 
@@ -66,8 +70,10 @@ public sealed class ConnectionInfo
 /// <param name="RetryPct">Retries as % of transmitted frames over the last second (raw, jumpy).</param>
 /// <param name="RetryAvgPct">Retries over the last ~10 s, leaving out seconds that overlapped a scan.</param>
 /// <param name="DuringScan">Taken while one of AirScope's own scans had the radio off-channel.</param>
+/// <param name="TxFrames">Frames sent in the second <paramref name="RetryPct"/> covers. Few frames = a noisy percentage.</param>
+/// <param name="TxFramesAvg">Scan-free frames behind <paramref name="RetryAvgPct"/>.</param>
 public readonly record struct LinkSample(DateTime Utc, int Rssi, double RxMbps, double TxMbps, double? RetryPct,
-    double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false);
+    double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false, int TxFrames = 0, int TxFramesAvg = 0);
 
 /// <summary>When neighbour scans are allowed to take the radio off-channel.</summary>
 public enum ScanMode
@@ -87,6 +93,8 @@ public sealed class EventEntry
     public DateTime Local { get; init; } = DateTime.Now;
     public EventKind Kind { get; init; }
     public string Text { get; init; } = "";
+    /// <summary>Text as displayed: network names and addresses masked in screenshot mode.</summary>
+    public string Shown => Privacy.Text(Text);
     public string TimeText => Local.ToString("HH:mm:ss");
     public string Icon => Kind switch
     {

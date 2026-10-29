@@ -51,7 +51,7 @@ public partial class MiniWindow : Window
         Quality.Foreground = Palette.B(col);
         Tx.Text = $"↑ {x.TxMbps:0} Mbps";
         Rx.Text = $"↓ {x.RxMbps:0} Mbps";
-        Info.Text = (ping != null ? $"{ping} · " : "") + $"{c.Ssid} · ch {c.Channel}";   // ping first so a long SSID can't hide it
+        Info.Text = (ping != null ? $"{ping} · " : "") + $"{Privacy.Name(c.Ssid)} · ch {c.Channel}";   // ping first so a long SSID can't hide it
         if (window != null)
         {
             var cutoff = DateTime.UtcNow.AddSeconds(-60);

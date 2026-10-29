@@ -47,7 +47,7 @@ public sealed class BssRow : INotifyPropertyChanged
 
     public ulong Key => Info.Key;
     public string Ssid => Info.DisplaySsid;
-    public string Bssid => Info.Bssid;
+    public string Bssid => Info.DisplayBssid;
     public string Vendor => Info.Vendor;
     public int Rssi => Info.Rssi;
     public int Channel => Info.Channel;
@@ -75,7 +75,10 @@ public sealed class BssRow : INotifyPropertyChanged
         }
     }
     public double Opacity => IsStale ? 0.45 : 1;
-    public Brush SsidBrush => Palette.B(Palette.ForName(Info.DisplaySsid));
+    public Brush SsidBrush => Palette.B(Palette.ForName(Info.ColorKey));
+
+    /// <summary>Re-read every displayed property (screenshot mode toggled).</summary>
+    public void RefreshAll() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
     public string ConnectedMark => IsConnected ? "●" : "";
     public string Flags => string.Join(" ", new[]
     {

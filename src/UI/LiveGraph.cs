@@ -285,7 +285,7 @@ public sealed class LiveGraph : FrameworkElement
                 dc.DrawLine(CrossPen, new Point(x, plot.Top), new Point(x, plot.Bottom));
                 dc.DrawEllipse(CrossDot, null, new Point(x, Y(b.Rssi)), 3, 3);
                 string txt = $"{b.Utc.ToLocalTime():HH:mm:ss.f}\n{b.Rssi} dBm   ↑{b.TxMbps:0}  ↓{b.RxMbps:0} Mbps" +
-                             (b.RetryPct is double r ? $"\nretries {r:0.0}%" : "");
+                             (b.RetryPct is double r ? $"\nretries {r:0.0}% of {b.TxFrames} frames" : "");
                 if (NearestPing(b.Utc) is PingSample ps) txt += ps.Ms is double pm ? $"\nrouter ping {PingStats.Ms(pm)} ms" : "\nrouter ping lost";
                 var scan = ScanAt(b.Utc);
                 if (scan is ScanMark sm) txt += sm.Own ? "\n(during an AirScope scan)" : "\n(around a Windows/other-app scan)";

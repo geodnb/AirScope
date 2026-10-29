@@ -54,6 +54,10 @@ public partial class MainWindow : Window
     private readonly List<ScanMark> _marksWork = new();
     private readonly List<PingSample> _pingWork = new();
     private double? _retryPeak;
+    /// <summary>Scan-free frames in the 10 s retry window below which the link counts as lightly used.</summary>
+    private const int LightTrafficFrames = 300;
+    /// <summary>A single second needs this many frames to count towards the retry peak.</summary>
+    private const int PeakMinFrames = 100;
     private readonly List<LinkSample> _peakWork = new(), _peakClean = new();
     private string _scanState = "";
     private DateTime _lastActiveUtc = DateTime.UtcNow;
@@ -92,6 +96,7 @@ public partial class MainWindow : Window
         ScanModeBox.ItemsSource = new[] { "Auto — only while viewing networks", "Always — every interval", "Off — use Windows' own scans" };
         ScanModeBox.SelectedIndex = (int)_settings.ScanMode;
         PingCheck.IsChecked = _settings.PingRouter;
+        ScreenshotCheck.IsChecked = Privacy.On = _settings.HideIdentifiers;
         PingCard.Visibility = _settings.PingRouter ? Visibility.Visible : Visibility.Collapsed;
         SpotDuration.ItemsSource = new[] { "10 seconds", "30 seconds", "60 seconds", "2 minutes" };
         SpotDuration.SelectedIndex = 1;
@@ -297,13 +302,14 @@ public partial class MainWindow : Window
         QualityBar.Value = ChannelMath.QualityFromRssi(s.Rssi);
 
         var ap = _mon.GetBss(c.BssidKey);
-        ConnSsid.Text = string.IsNullOrEmpty(c.Ssid) ? "(hidden network)" : c.Ssid;
+        Privacy.OwnSsid = c.Ssid;
+        ConnSsid.Text = string.IsNullOrEmpty(c.Ssid) ? "(hidden network)" : Privacy.Name(c.Ssid);
         ConnSub.Text = ap != null
             ? $"{ChannelMath.BandName(ap.Band)} · ch {c.Channel} · {ap.WidthLabel} MHz · {ap.GenLabel}"
             : $"ch {c.Channel} · {c.PhyName}";
 
-        _link["Network"].Text = string.IsNullOrEmpty(c.Profile) || c.Profile == c.Ssid ? c.Ssid : $"{c.Ssid}  (profile {c.Profile})";
-        _link["BSSID"].Text = c.Bssid;
+        _link["Network"].Text = string.IsNullOrEmpty(c.Profile) || c.Profile == c.Ssid || Privacy.On ? Privacy.Name(c.Ssid) : $"{c.Ssid}  (profile {c.Profile})";
+        _link["BSSID"].Text = Privacy.Mac(c.Bssid);
         _link["Vendor"].Text = ap?.Vendor is { Length: > 0 } v ? v : OuiLookup.Vendor(c.BssidKey) is { Length: > 0 } v2 ? v2 : "—";
         _link["Band · channel"].Text = ap != null ? $"{ChannelMath.BandName(ap.Band)} · {c.Channel}{(ap.Dfs ? "  (DFS)" : "")}" : $"{c.Channel}";
         _link["Width"].Text = ap != null ? $"{ap.WidthLabel} MHz" : "—";
@@ -313,11 +319,13 @@ public partial class MainWindow : Window
         _link["Rx link rate"].Text = $"{c.RxMbps:0} Mbps";
         _link["Tx link rate"].Text = $"{c.TxMbps:0} Mbps";
         _link["AP max PHY"].Text = ap?.MaxPhyMbps is double m ? $"{m:0} Mbps  ({(ap.Streams > 0 ? ap.Streams : 1)} stream{(ap.Streams > 1 ? "s" : "")})" : "—";
+        // Below ~30 frames a second (an idle PC), a couple of retries look like a big percentage, so say so.
+        bool light = s.TxFramesAvg < LightTrafficFrames;
         _link["Retries"].Text = s.RetryAvgPct is double ra
-            ? $"{ra:0.0}% avg" + (_retryPeak is double pk && pk >= ra + 3 ? $" · peak {pk:0}%" : "")
+            ? (light ? $"≈{ra:0}% · light traffic" : $"{ra:0.0}% avg" + (_retryPeak is double pk && pk >= ra + 3 ? $" · peak {pk:0}%" : ""))
             : !s.CountersOk ? "not reported by driver"
             : s.RetryPct is double && _mon.Scans.Overlaps(DateTime.UtcNow.AddSeconds(-11), DateTime.UtcNow) ? "scans too frequent for a clean figure"
-            : s.RetryPct is double r2 ? $"{r2:0.0}% of frames"
+            : s.RetryPct is double r2 && s.TxFrames >= PeakMinFrames ? $"{r2:0.0}% of frames"
             : "idle — too little traffic";
         _link["Windows signal"].Text = $"{c.SignalQuality}%";
         _link["AP clients"].Text = ap?.StationCount?.ToString(CultureInfo.InvariantCulture) ?? "not advertised";
@@ -354,7 +362,7 @@ public partial class MainWindow : Window
             _mon.Scans.CopySince(now.AddSeconds(-62), now, _marksWork);
             ScanTimeline.ExcludeCovered(_peakWork, x => x.Utc, _marksWork, _peakClean);
             foreach (var x in _peakClean)
-                if (x.RetryPct is double rp && (_retryPeak is not double cur || rp > cur)) _retryPeak = rp;
+                if (x.RetryPct is double rp && x.TxFrames >= PeakMinFrames && (_retryPeak is not double cur || rp > cur)) _retryPeak = rp;
             _mini?.Update(s, c, _statWork, MiniPingText(now));
         }
     }
@@ -505,14 +513,14 @@ public partial class MainWindow : Window
         }
         var b = row.Info;
         DetTitle.Text = b.DisplaySsid;
-        DetTitle.Foreground = Palette.B(Palette.ForName(b.DisplaySsid));
+        DetTitle.Foreground = Palette.B(Palette.ForName(b.ColorKey));
         DetSub.Text = $"{b.Rssi} dBm · {ChannelMath.Describe(b.Rssi)}" + (row.IsConnected ? " · connected" : "");
         var hist = _mon.GetHistory(b.Key);
-        DetSpark.Stroke = Palette.ForName(b.DisplaySsid);
+        DetSpark.Stroke = Palette.ForName(b.ColorKey);
         DetSpark.SetPoints(hist.Select(h => (double)h.rssi).TakeLast(120).ToList());
         DetSparkLabel.Text = hist.Count > 1 ? $"Last {FormatSpan(hist[^1].utc - hist[Math.Max(0, hist.Count - 120)].utc)} · min {hist.TakeLast(120).Min(h => h.rssi)} / max {hist.TakeLast(120).Max(h => h.rssi)} dBm" : "";
 
-        _det["BSSID"].Text = b.Bssid;
+        _det["BSSID"].Text = b.DisplayBssid;
         _det["Vendor"].Text = b.Vendor.Length > 0 ? b.Vendor : "unknown";
         _det["Band"].Text = ChannelMath.BandName(b.Band);
         _det["Channel"].Text = $"{b.Channel}  ({b.FreqMHz} MHz){(b.Dfs ? " · DFS" : "")}";
@@ -575,9 +583,9 @@ public partial class MainWindow : Window
         var series = pick.Select(b =>
         {
             string name = dupNames.Contains(b.DisplaySsid)
-                ? $"{b.DisplaySsid} · {ChannelMath.BandName(b.Band)} ch{b.Channel} · …{b.Bssid[^5..]}"
+                ? $"{b.DisplaySsid} · {ChannelMath.BandName(b.Band)} ch{b.Channel} · {(Privacy.On ? b.DisplayBssid : "…" + b.Bssid[^5..])}"
                 : $"{b.DisplaySsid} · ch{b.Channel}";
-            var col = byIndex || dupNames.Contains(b.DisplaySsid) ? Palette.ForIndex(i) : Palette.ForName(b.DisplaySsid);
+            var col = byIndex || dupNames.Contains(b.DisplaySsid) ? Palette.ForIndex(i) : Palette.ForName(b.ColorKey);
             i++;
             return new HistorySeries(name, col, _mon.GetHistory(b.Key), b.Key == _conn.BssidKey && _conn.Connected);
         }).ToList();
@@ -721,7 +729,8 @@ public partial class MainWindow : Window
         UpdateScanPolicy();
         string scanAge = _mon?.LastScanUtc is DateTime t ? $"last scan {FormatSpan(now - t)} ago" : "no scan yet";
         StatusLeft.Text = _status;
-        StatusRight.Text = $"{scanAge} · live {_settings.PollMs} ms" + (_scanState.Length > 0 ? " · " + _scanState : "");
+        StatusRight.Text = $"{scanAge} · live {_settings.PollMs} ms" + (_scanState.Length > 0 ? " · " + _scanState : "")
+            + (Privacy.On ? " · screenshot mode" : "");
         UpdatePing(now);
 
         if (_logger != null)
@@ -852,6 +861,34 @@ public partial class MainWindow : Window
         }
         Live.MarkDirty();
         Live.InvalidateVisual();
+    }
+
+    private void ClearGraph_Click(object sender, RoutedEventArgs e)
+    {
+        _mon?.ResetLive();
+        _pinger?.Clear();
+        ResetPingEvents();
+        _retryPeak = null;
+        _lastStatsUtc = DateTime.MinValue;
+        StatMin.Text = StatAvg.Text = StatMax.Text = StatJit.Text = "—";
+        StatNote.Text = "Collecting…";
+        PingNow.Text = PingAvg.Text = PingP95.Text = PingLoss.Text = "—";
+        PingSpark.SetPoints(Array.Empty<double>());
+        Live.MarkDirty();
+        Live.InvalidateVisual();
+    }
+
+    private void ScreenshotCheck_Click(object sender, RoutedEventArgs e)
+    {
+        Privacy.On = _settings.HideIdentifiers = ScreenshotCheck.IsChecked == true;
+        // Re-render everything that shows a name or address.
+        foreach (var r in _rows) r.RefreshAll();
+        EventList.Items.Refresh();
+        SpotGrid.Items.Refresh();
+        RefreshChannelGraphs();
+        RefreshDetails();
+        RefreshVisibleTab();
+        UpdateLive(_latestConn);
     }
 
     private void Pause_Click(object sender, RoutedEventArgs e)

@@ -35,7 +35,7 @@ public sealed class CsvLogger : IDisposable
         _link = new StreamWriter(LinkPath, false, new UTF8Encoding(true));
         _scan = new StreamWriter(ScanPath, false, new UTF8Encoding(true));
         // own_scan = 1 while one of AirScope's own scans had the radio off-channel (Windows' scans aren't known in real time).
-        _link.WriteLine("time_local,ssid,bssid,channel,rssi_dbm,rx_mbps,tx_mbps,retry_pct,retry_avg_pct,own_scan");
+        _link.WriteLine("time_local,ssid,bssid,channel,rssi_dbm,rx_mbps,tx_mbps,retry_pct,retry_avg_pct,own_scan,tx_frames");
         _scan.WriteLine("time_local,ssid,bssid,vendor,band,channel,width_mhz,rssi_dbm,standard,security,stations,utilisation_pct");
     }
 
@@ -54,7 +54,8 @@ public sealed class CsvLogger : IDisposable
                 s.TxMbps.ToString("0.#", CultureInfo.InvariantCulture),
                 s.RetryPct?.ToString("0.0", CultureInfo.InvariantCulture) ?? "",
                 s.RetryAvgPct?.ToString("0.0", CultureInfo.InvariantCulture) ?? "",
-                s.DuringScan ? "1" : "0"));
+                s.DuringScan ? "1" : "0",
+                s.TxFrames.ToString(CultureInfo.InvariantCulture)));
             Rows++;
             MaybeFlush();
             }
@@ -72,7 +73,7 @@ public sealed class CsvLogger : IDisposable
             string t = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
             foreach (var b in scan)
             {
-                _scan.WriteLine(string.Join(",", t, Esc(b.DisplaySsid), b.Bssid, Esc(b.Vendor),
+                _scan.WriteLine(string.Join(",", t, Esc(b.Hidden ? "‹hidden›" : b.Ssid), b.Bssid, Esc(b.Vendor),
                     ChannelMath.BandName(b.Band), b.Channel, b.WidthMHz, b.Rssi, Esc(b.Standard), Esc(b.Security),
                     b.StationCount?.ToString(CultureInfo.InvariantCulture) ?? "",
                     b.ChannelUtilisation is double u ? (u * 100).ToString("0", CultureInfo.InvariantCulture) : ""));
