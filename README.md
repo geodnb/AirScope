@@ -29,7 +29,6 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 - **CSV recording** of everything it sees.
 - **No admin rights, no internet access, no telemetry, no changes to your PC.**
 
-<img width="1660" height="1056" alt="Screenshot 2026-10-29 032707" src="https://github.com/user-attachments/assets/623eafc6-0157-488f-9b84-1b7035c1f9fb" />
 
 
 ---
