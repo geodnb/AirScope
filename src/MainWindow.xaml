@@ -424,9 +424,9 @@
                             <DataGrid x:Name="SpotGrid" SelectionMode="Extended">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="" Binding="{Binding BaselineMark}" Width="28"/>
-                                    <DataGridTextColumn Header="Label" Binding="{Binding Label}" Width="160"/>
+                                    <DataGridTextColumn Header="Label" Binding="{Binding LabelShown}" SortMemberPath="Label" Width="160"/>
                                     <DataGridTextColumn Header="Taken" Binding="{Binding TakenText}" SortMemberPath="TakenLocal" Width="100"/>
-                                    <DataGridTextColumn Header="Network" Binding="{Binding SsidShown}" SortMemberPath="Ssid" Width="110"/>
+                                    <DataGridTextColumn Header="Network" Binding="{Binding SsidShown}" Width="110"/>
                                     <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="66"/>
                                     <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" Width="44"/>
                                     <DataGridTextColumn Header="Avg dBm" Binding="{Binding RssiText}" SortMemberPath="RssiAvg" Width="70"/>

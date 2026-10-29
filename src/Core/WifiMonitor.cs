@@ -39,6 +39,7 @@ public sealed class WifiMonitor : IDisposable
     private int _forceScan;                                 // 1 = "Scan now" pressed
     private int _cacheDirty;                                // 1 = Windows refreshed its scan list since we last read it
     private int _resetLive;                                 // 1 = graph "Clear" pressed; poll loop drops its rolling state
+    private long _liveSinceTicks;                           // graph "Clear" cut-off (UTC ticks); 0 = none
     private long _lastOwnScanTick = long.MinValue / 2;      // Environment.TickCount64 (monotonic); scan loop only
     private static readonly TimeSpan MinOwnScanGap = TimeSpan.FromSeconds(3);
 
@@ -75,6 +76,8 @@ public sealed class WifiMonitor : IDisposable
         _ifaceBox = iface;
         Samples.Clear();
         Scans.Clear();
+        Interlocked.Exchange(ref _liveSinceTicks, 0);
+        Interlocked.Exchange(ref _resetLive, 0);
         Interlocked.Exchange(ref _forceScan, 0);            // a "Scan now" for the old adapter doesn't carry over
         lock (_bssLock) _bss.Clear();
         _connection = new ConnectionInfo();
@@ -98,14 +101,20 @@ public sealed class WifiMonitor : IDisposable
     }
 
     /// <summary>
-    /// Start the live picture afresh (graph "Clear"): drops the sample history, past scan shading and the rolling
-    /// retry window. Doesn't touch the connection, events, neighbour list or a scan in progress.
+    /// Start the live picture afresh (graph "Clear"). Nothing is deleted – samples, scan marks and pings stay for
+    /// signal-drop detection, spot tests and logging – the views just ignore anything before this moment, and the
+    /// poll loop restarts its rolling retry window.
     /// </summary>
     public void ResetLive()
     {
-        Samples.Clear();
-        Scans.ClearMarks();
+        Interlocked.Exchange(ref _liveSinceTicks, DateTime.UtcNow.Ticks);
         Interlocked.Exchange(ref _resetLive, 1);
+    }
+
+    /// <summary>Views show data from here on (the last "Clear"), or everything if never cleared.</summary>
+    public DateTime LiveSinceUtc
+    {
+        get { long t = Interlocked.Read(ref _liveSinceTicks); return t == 0 ? DateTime.MinValue : new DateTime(t, DateTimeKind.Utc); }
     }
 
     /// <summary>Trigger a scan right now (even in passive mode) instead of waiting for the next interval.</summary>
@@ -142,8 +151,9 @@ public sealed class WifiMonitor : IDisposable
         public ConnectionInfo? PrevConn;
         public (ulong tx, ulong retry)? PrevCounters;
         public double? RetryPct, RetryAvg;
-        public int RetryFrames, RetryAvgFrames;
-        public DateTime RetryPctUtc;
+        public int RetryFrames;
+        public double RetryFps, RetryAvgFps;
+        public long RetrySeq;
         public readonly Queue<(DateTime start, DateTime end, ulong dTx, ulong dRe)> RetryWin = new();
         public readonly List<LinkSample> Clean = new();
         public readonly List<ScanMark> Marks = new();
@@ -195,7 +205,9 @@ public sealed class WifiMonitor : IDisposable
         var now = DateTime.UtcNow;
         if (Interlocked.Exchange(ref _resetLive, 0) == 1)
         {
-            st.RetryWin.Clear(); st.RetryPct = null; st.RetryAvg = null; st.RetryFrames = st.RetryAvgFrames = 0;
+            // Also skip the counter interval that straddles the Clear.
+            st.RetryWin.Clear(); st.RetryPct = null; st.RetryAvg = null; st.PrevCounters = null;
+            st.RetryFrames = 0; st.RetryFps = st.RetryAvgFps = 0;
         }
         // Connection attributes change slowly; refresh them at ≤4 Hz.
         if ((now - st.LastConnQueryUtc).TotalMilliseconds >= 240 || st.PrevConn == null)
@@ -211,7 +223,7 @@ public sealed class WifiMonitor : IDisposable
         var conn = _connection;
         if (!conn.Connected)
         {
-            st.PrevCounters = null; st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.RetryFrames = st.RetryAvgFrames = 0;
+            st.PrevCounters = null; st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.RetryFrames = 0; st.RetryFps = st.RetryAvgFps = 0;
             if (!ct.IsCancellationRequested) SampleTaken?.Invoke(new LinkSample(now, -100, 0, 0, null), conn);
             return;
         }
@@ -228,21 +240,25 @@ public sealed class WifiMonitor : IDisposable
                 if (st.PrevCounters is { } p && k.tx >= p.tx && k.retry >= p.retry)
                 {
                     ulong dTx = k.tx - p.tx, dRe = k.retry - p.retry;
-                    if (dTx >= 20) { st.RetryPct = Math.Min(100, 100.0 * dRe / dTx); st.RetryPctUtc = now; st.RetryFrames = (int)Math.Min(int.MaxValue, dTx); }
-                    else if ((now - st.RetryPctUtc).TotalSeconds > 5) st.RetryPct = null;   // idle link: don't hold a stale figure forever
+                    double secs = Math.Max(0.5, (now - from).TotalSeconds);   // intervals can be ~2 s at slow poll rates
+                    st.RetrySeq++;
+                    st.RetryFrames = (int)Math.Min(int.MaxValue, dTx);
+                    st.RetryFps = dTx / secs;
+                    // Under 20 frames there's no meaningful percentage – report nothing rather than hold an old figure.
+                    st.RetryPct = dTx >= 20 ? Math.Min(100, 100.0 * dRe / dTx) : null;
                     st.RetryWin.Enqueue((from, now, dTx, dRe));
                     while (st.RetryWin.Count > 10) st.RetryWin.Dequeue();   // ~10 s; by count so clock changes can't break it
-                    (st.RetryAvg, st.RetryAvgFrames) = RollingRetry(st.RetryWin);
+                    (st.RetryAvg, st.RetryAvgFps) = RollingRetry(st.RetryWin);
                 }
                 else st.RetryWin.Clear();   // first read, or counters reset (reconnect / driver restart)
                 st.PrevCounters = (k.tx, k.retry);
             }
-            else { st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.PrevCounters = null; st.RetryFrames = st.RetryAvgFrames = 0; }
+            else { st.RetryPct = null; st.RetryAvg = null; st.RetryWin.Clear(); st.PrevCounters = null; st.RetryFrames = 0; st.RetryFps = st.RetryAvgFps = 0; }
         }
 
         if (ct.IsCancellationRequested) return;
         var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct, st.RetryAvg, Scans.OwnActive(now), st.PrevCounters != null,
-            st.RetryPct != null ? st.RetryFrames : 0, st.RetryAvgFrames);
+            st.RetryPct != null ? st.RetryFrames : 0, st.RetryFps, st.RetryAvgFps, st.RetryPct != null ? st.RetrySeq : 0);
         Samples.Add(s);
         DetectSignalDrop(st, now);
         SampleTaken?.Invoke(s, conn);
@@ -253,13 +269,15 @@ public sealed class WifiMonitor : IDisposable
     /// not when each second was recorded, so Windows' scans (reported only when they finish) drop out once known.
     /// Null when there isn't enough scan-free traffic to say.
     /// </summary>
-    private (double? pct, int frames) RollingRetry(IEnumerable<(DateTime start, DateTime end, ulong dTx, ulong dRe)> win)
+    /// <returns>The percentage, and the scan-free frames per second it's based on (how busy the link was).</returns>
+    private (double? pct, double fps) RollingRetry(IEnumerable<(DateTime start, DateTime end, ulong dTx, ulong dRe)> win)
     {
         ulong tx = 0, re = 0;
+        double secs = 0;
         foreach (var w in win)
-            if (!Scans.Overlaps(w.start, w.end)) { tx += w.dTx; re += w.dRe; }
-        int frames = (int)Math.Min(int.MaxValue, tx);
-        return (tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null, frames);
+            if (!Scans.Overlaps(w.start, w.end)) { tx += w.dTx; re += w.dRe; secs += Math.Max(0, (w.end - w.start).TotalSeconds); }
+        double fps = secs > 0 ? tx / secs : 0;
+        return (tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null, fps);
     }
 
     private static ConnectionInfo CopyWithChannel(ConnectionInfo c, int ch) => new()
@@ -280,7 +298,7 @@ public sealed class WifiMonitor : IDisposable
         st.PrevConn = c;
         if (p == null)
         {
-            if (c.Connected) Raise(EventKind.Connect, $"Connected to {c.Ssid} · {c.Bssid} · ch {c.Channel}");
+            if (c.Connected) RaiseNamed(EventKind.Connect, $"Connected to {{s0}} · {{b0}} · ch {c.Channel}", new[] { c.Ssid }, new[] { c.Bssid });
             return;
         }
 
@@ -295,7 +313,7 @@ public sealed class WifiMonitor : IDisposable
         {
             if (st.LostConn != null && !st.DisconnectReported && (now - st.LostAtUtc).TotalSeconds >= RoamGraceSeconds)
             {
-                Raise(EventKind.Disconnect, $"Disconnected from {st.LostConn.Ssid} ({c.State})");
+                RaiseNamed(EventKind.Disconnect, $"Disconnected from {{s0}} ({c.State})", new[] { st.LostConn.Ssid }, Array.Empty<string>());
                 st.DisconnectReported = true;
             }
             return;
@@ -307,14 +325,14 @@ public sealed class WifiMonitor : IDisposable
             if (lost != null && !st.DisconnectReported)
             {
                 if (lost.BssidKey != c.BssidKey)
-                    Raise(EventKind.Roam, $"Roamed {lost.Bssid} (ch {lost.Channel}) → {c.Bssid} (ch {c.Channel})");
+                    RaiseNamed(EventKind.Roam, $"Roamed {{b0}} (ch {lost.Channel}) → {{b1}} (ch {c.Channel})", Array.Empty<string>(), new[] { lost.Bssid, c.Bssid });
                 else
-                    Raise(EventKind.Warning, $"Link to {c.Ssid} dropped briefly ({(now - st.LostAtUtc).TotalSeconds:0.0}s) and recovered");
+                    RaiseNamed(EventKind.Warning, $"Link to {{s0}} dropped briefly ({(now - st.LostAtUtc).TotalSeconds:0.0}s) and recovered", new[] { c.Ssid }, Array.Empty<string>());
             }
             else
             {
                 string gap = st.DisconnectReported ? $" after {FormatGap(now - st.LostAtUtc)} offline" : "";
-                Raise(EventKind.Connect, $"Connected to {c.Ssid} · {c.Bssid} · ch {c.Channel}{gap}");
+                RaiseNamed(EventKind.Connect, $"Connected to {{s0}} · {{b0}} · ch {c.Channel}{gap}", new[] { c.Ssid }, new[] { c.Bssid });
             }
             st.PendingChannel = null; st.RateLowCount = 0; st.LastChannel = c.Channel;
             return;
@@ -322,7 +340,7 @@ public sealed class WifiMonitor : IDisposable
 
         if (p.BssidKey != c.BssidKey)
         {
-            Raise(EventKind.Roam, $"Roamed {p.Bssid} (ch {p.Channel}) → {c.Bssid} (ch {c.Channel})");
+            RaiseNamed(EventKind.Roam, $"Roamed {{b0}} (ch {p.Channel}) → {{b1}} (ch {c.Channel})", Array.Empty<string>(), new[] { p.Bssid, c.Bssid });
             st.PendingChannel = null; st.RateLowCount = 0; st.LastChannel = c.Channel;
             return;
         }
@@ -398,6 +416,13 @@ public sealed class WifiMonitor : IDisposable
     }
 
     private void Raise(EventKind k, string text) => EventRaised?.Invoke(new EventEntry { Kind = k, Text = text });
+
+    /// <summary>Events that mention a network name or address keep them separate so the screen can mask them.</summary>
+    private void RaiseNamed(EventKind k, string template, string[] ssids, string[] bssids)
+    {
+        if (_connection is { Connected: true } c) Privacy.OwnSsid = c.Ssid;   // so "My network" is right from the first event
+        EventRaised?.Invoke(EventEntry.Make(k, template, ssids, bssids));
+    }
 
     // ------------------------------------------------------------------ scan loop
 
@@ -513,6 +538,7 @@ public sealed class WifiMonitor : IDisposable
         {
             foreach (var b in list)
             {
+                if (!b.Hidden) Privacy.Register(b.Ssid);
                 if (!_bss.TryGetValue(b.Key, out var t))
                     _bss[b.Key] = t = new BssTrack { Latest = b, FirstSeenUtc = now };
                 else if (b.Tsf != 0 && b.Tsf == t.Latest.Tsf)

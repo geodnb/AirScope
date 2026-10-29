@@ -41,6 +41,7 @@ public sealed class SpotTestResult
     public string StabilityText => $"±{RssiStdDev:0.0}";
     public string RetryText => RetryAvg is double r ? $"{r:0.0}%" : "—";
     [System.Text.Json.Serialization.JsonIgnore] public string SsidShown => Privacy.Name(Ssid);
+    [System.Text.Json.Serialization.JsonIgnore] public string LabelShown => Privacy.Text(Label);
     [System.Text.Json.Serialization.JsonIgnore] public string PingText => PingAvg is double a ? $"{PingStats.Ms(a)} / {PingStats.Ms(PingP95)}" : "—";
     [System.Text.Json.Serialization.JsonIgnore] public string LossText => PingLossPct is double l ? $"{l:0.#}%" : "—";
 }
@@ -85,8 +86,10 @@ public sealed class SpotTestRunner
         ScanTimeline.ExcludeCovered(_samples, x => x.Utc, scans, clean);
         var use = clean.Count * 2 >= _samples.Count ? clean : _samples;
         var st = Stats.Of(use.Select(x => (double)x.Rssi).ToList());
-        // Frame-weighted, so idle seconds with a handful of frames can't swing the result.
-        var withRetry = use.Where(x => x.RetryPct.HasValue && x.TxFrames > 0).ToList();
+        // Frame-weighted (Σ retries / Σ frames), so idle seconds with a handful of frames can't swing the result.
+        // Several samples share one counter read; count each read once.
+        var withRetry = use.Where(x => x.RetryPct.HasValue && x.TxFrames > 0 && x.RetrySeq > 0)
+            .GroupBy(x => x.RetrySeq).Select(g => g.First()).ToList();
         double frames = withRetry.Sum(x => (double)x.TxFrames);
         return new SpotTestResult
         {

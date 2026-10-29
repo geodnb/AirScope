@@ -25,6 +25,7 @@ public static class Privacy
     public static string Name(string ssid, bool hidden = false)
     {
         if (hidden || string.IsNullOrEmpty(ssid)) return "‹hidden›";
+        Register(ssid);
         if (!_on) return ssid;
         if (ssid == _ownSsid) return "My network";
         lock (Lock)
@@ -44,18 +45,30 @@ public static class Privacy
         }
     }
 
-    /// <summary>Mask any MAC addresses and known network names inside free text (event messages).</summary>
+    /// <summary>
+    /// Fallback for free text (e.g. spot-test labels): masks MAC addresses and any network name AirScope has seen,
+    /// in one pass and only as whole words, so stand-ins can't be re-masked and "ch 100" stays "ch 100" unless a
+    /// network is literally called "100". Events don't rely on this – they keep names separate.
+    /// </summary>
     public static string Text(string text)
     {
         if (!_on || string.IsNullOrEmpty(text)) return text;
         text = MacPattern.Replace(text, m => Mac(m.Value));
-        string own = _ownSsid;
-        List<string> known;
-        lock (Lock) known = Names.Keys.ToList();
-        if (own.Length > 0 && !known.Contains(own)) known.Add(own);
-        // Very short names (e.g. "a") would mangle unrelated words, so only replace names of 3+ characters.
-        foreach (var ssid in known.Where(s => s.Length >= 3).OrderByDescending(s => s.Length))
-            text = text.Replace(ssid, Name(ssid));
-        return text;
+        var names = new List<string>();
+        lock (Lock) names.AddRange(Seen);
+        if (_ownSsid.Length > 0) names.Add(_ownSsid);
+        names = names.Where(n => n.Length > 0).Distinct().OrderByDescending(n => n.Length).ToList();
+        if (names.Count == 0) return text;
+        var rx = new Regex(@"(?<![\w])(" + string.Join("|", names.Select(Regex.Escape)) + @")(?![\w])");
+        return rx.Replace(text, m => Name(m.Value));
     }
+
+    /// <summary>Remember a network name so free text mentioning it can be masked later. Safe from any thread.</summary>
+    public static void Register(string ssid)
+    {
+        if (string.IsNullOrEmpty(ssid)) return;
+        lock (Lock) Seen.Add(ssid);
+    }
+
+    private static readonly HashSet<string> Seen = new();
 }

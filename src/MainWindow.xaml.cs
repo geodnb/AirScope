@@ -54,10 +54,10 @@ public partial class MainWindow : Window
     private readonly List<ScanMark> _marksWork = new();
     private readonly List<PingSample> _pingWork = new();
     private double? _retryPeak;
-    /// <summary>Scan-free frames in the 10 s retry window below which the link counts as lightly used.</summary>
-    private const int LightTrafficFrames = 300;
-    /// <summary>A single second needs this many frames to count towards the retry peak.</summary>
-    private const int PeakMinFrames = 100;
+    /// <summary>Scan-free frames per second below which the link counts as lightly used (an idle PC).</summary>
+    private const double LightTrafficFps = 30;
+    /// <summary>A counter interval needs this many frames per second to count towards the retry peak.</summary>
+    private const double PeakMinFps = 100;
     private readonly List<LinkSample> _peakWork = new(), _peakClean = new();
     private string _scanState = "";
     private DateTime _lastActiveUtc = DateTime.UtcNow;
@@ -189,6 +189,7 @@ public partial class MainWindow : Window
         _connectedSinceUtc = null;
         _conn = new ConnectionInfo();
         Live.Buffer = _mon.Samples;
+        Live.SinceUtc = DateTime.MinValue;   // a new adapter starts with a fresh graph anyway
         _mon.Stop();                          // old loops finish (and queue their last callbacks) first…
         Interlocked.Increment(ref _gen);      // …which are then ignored as belonging to the old adapter
         _events.Clear();
@@ -320,17 +321,18 @@ public partial class MainWindow : Window
         _link["Tx link rate"].Text = $"{c.TxMbps:0} Mbps";
         _link["AP max PHY"].Text = ap?.MaxPhyMbps is double m ? $"{m:0} Mbps  ({(ap.Streams > 0 ? ap.Streams : 1)} stream{(ap.Streams > 1 ? "s" : "")})" : "—";
         // Below ~30 frames a second (an idle PC), a couple of retries look like a big percentage, so say so.
-        bool light = s.TxFramesAvg < LightTrafficFrames;
+        bool light = s.TxFpsAvg < LightTrafficFps;
         _link["Retries"].Text = s.RetryAvgPct is double ra
             ? (light ? $"≈{ra:0}% · light traffic" : $"{ra:0.0}% avg" + (_retryPeak is double pk && pk >= ra + 3 ? $" · peak {pk:0}%" : ""))
             : !s.CountersOk ? "not reported by driver"
             : s.RetryPct is double && _mon.Scans.Overlaps(DateTime.UtcNow.AddSeconds(-11), DateTime.UtcNow) ? "scans too frequent for a clean figure"
-            : s.RetryPct is double r2 && s.TxFrames >= PeakMinFrames ? $"{r2:0.0}% of frames"
+            : s.RetryPct is double r2 && s.TxFps >= PeakMinFps ? $"{r2:0.0}% of frames"
             : "idle — too little traffic";
         _link["Windows signal"].Text = $"{c.SignalQuality}%";
         _link["AP clients"].Text = ap?.StationCount?.ToString(CultureInfo.InvariantCulture) ?? "not advertised";
         _link["Channel busy"].Text = ap?.ChannelUtilisation is double u ? $"{u * 100:0}%" : "not advertised";
-        _link["AP uptime"].Text = ap?.ApUptime is TimeSpan up ? FormatSpan(up) : "—";
+        // Uptime is unique to your router at that moment, so it could link screenshots together.
+        _link["AP uptime"].Text = Privacy.On ? "hidden" : ap?.ApUptime is TimeSpan up ? FormatSpan(up) : "—";
         _link["BSS colour"].Text = ap?.BssColor?.ToString(CultureInfo.InvariantCulture) ?? "—";
         _link["Country"].Text = ap?.Country ?? "—";
         _link["Connected for"].Text = _connectedSinceUtc is DateTime since ? FormatSpan(DateTime.UtcNow - since) : "—";
@@ -339,7 +341,8 @@ public partial class MainWindow : Window
         if (changedAp || (now - _lastStatsUtc).TotalMilliseconds >= 500)
         {
             _lastStatsUtc = now;
-            _mon.Samples.CopySince(now.AddSeconds(-Live.WindowSeconds), _statWork);
+            var statFrom = Max(now.AddSeconds(-Live.WindowSeconds), _mon.LiveSinceUtc);
+            _mon.Samples.CopySince(statFrom, _statWork);
             // Readings taken while the radio was off-channel scanning say nothing about the link; leave them out.
             _mon.Scans.CopySince(now.AddSeconds(-Live.WindowSeconds), now, _marksWork);
             ScanTimeline.ExcludeCovered(_statWork, x => x.Utc, _marksWork, _cleanWork);
@@ -358,11 +361,11 @@ public partial class MainWindow : Window
             }
             // Peak over a fixed minute, scan moments excluded (otherwise it's nearly always a scan burst).
             _retryPeak = null;
-            _mon.Samples.CopySince(now.AddSeconds(-60), _peakWork);
+            _mon.Samples.CopySince(Max(now.AddSeconds(-60), _mon.LiveSinceUtc), _peakWork);
             _mon.Scans.CopySince(now.AddSeconds(-62), now, _marksWork);
             ScanTimeline.ExcludeCovered(_peakWork, x => x.Utc, _marksWork, _peakClean);
             foreach (var x in _peakClean)
-                if (x.RetryPct is double rp && x.TxFrames >= PeakMinFrames && (_retryPeak is not double cur || rp > cur)) _retryPeak = rp;
+                if (x.RetryPct is double rp && x.TxFps >= PeakMinFps && (_retryPeak is not double cur || rp > cur)) _retryPeak = rp;
             _mini?.Update(s, c, _statWork, MiniPingText(now));
         }
     }
@@ -451,7 +454,7 @@ public partial class MainWindow : Window
         if (q.Length > 0)
         {
             var c = StringComparison.OrdinalIgnoreCase;
-            if (!(b.DisplaySsid.Contains(q, c) || b.Bssid.Contains(q, c) || b.Vendor.Contains(q, c) ||
+            if (!(b.DisplaySsid.Contains(q, c) || b.DisplayBssid.Contains(q, c) || b.Vendor.Contains(q, c) ||
                   b.Security.Contains(q, c) || b.GenLabel.Contains(q, c) || b.Channel.ToString(CultureInfo.InvariantCulture) == q))
                 return false;
         }
@@ -539,7 +542,7 @@ public partial class MainWindow : Window
         _det["Multi-link"].Text = b.MultiLink ? "Yes (Wi-Fi 7 MLO)" : "No";
         _det["Country"].Text = b.Country ?? "—";
         _det["Beacon"].Text = b.BeaconIntervalTu > 0 ? $"{b.BeaconIntervalTu * 1.024:0} ms" : "—";
-        _det["AP uptime"].Text = b.ApUptime is TimeSpan t ? FormatSpan(t) : "—";
+        _det["AP uptime"].Text = Privacy.On ? "hidden" : b.ApUptime is TimeSpan t ? FormatSpan(t) : "—";
         _det["First seen"].Text = row.FirstSeenUtc.ToLocalTime().ToString("HH:mm:ss");
         _det["Last seen"].Text = row.LastSeen;
     }
@@ -764,7 +767,7 @@ public partial class MainWindow : Window
                 });
                 _logger = lg;
                 RecText.Text = "Recording…";
-                AddEvent(new EventEntry { Kind = EventKind.Info, Text = $"Recording to {_logger.Folder}" });
+                AddEvent(new EventEntry { Kind = EventKind.Info, Text = @"Recording to Documents\AirScope\Logs" });   // not the full path: it contains your Windows user name
             }
             catch (Exception ex)
             {
@@ -863,10 +866,17 @@ public partial class MainWindow : Window
         Live.InvalidateVisual();
     }
 
+    private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
+
+    /// <summary>
+    /// Start the graph and its stats afresh. Nothing is deleted (spot tests, drop detection and recording carry on
+    /// unaffected); the views just ignore anything before now.
+    /// </summary>
     private void ClearGraph_Click(object sender, RoutedEventArgs e)
     {
-        _mon?.ResetLive();
-        _pinger?.Clear();
+        if (_mon == null) return;
+        _mon.ResetLive();
+        Live.SinceUtc = _mon.LiveSinceUtc;
         ResetPingEvents();
         _retryPeak = null;
         _lastStatsUtc = DateTime.MinValue;
@@ -881,6 +891,9 @@ public partial class MainWindow : Window
     private void ScreenshotCheck_Click(object sender, RoutedEventArgs e)
     {
         Privacy.On = _settings.HideIdentifiers = ScreenshotCheck.IsChecked == true;
+        if (Privacy.On) FilterBox.Text = "";   // it may contain a network name or address you typed
+        _view.Refresh(); UpdateCount();
+        _lastStatsUtc = DateTime.MinValue;   // so the mini window updates straight away too
         // Re-render everything that shows a name or address.
         foreach (var r in _rows) r.RefreshAll();
         EventList.Items.Refresh();
@@ -1053,7 +1066,7 @@ public partial class MainWindow : Window
         if (_pinger == null || _mon == null) { PingNote.Text = "The Windows Wi-Fi API isn't available, so there's no adapter to ping through."; return; }
 
         var status = _pinger.Current;
-        _pinger.CopySince(now.AddSeconds(-Live.WindowSeconds), _pingWork);
+        _pinger.CopySince(Max(now.AddSeconds(-Live.WindowSeconds), _mon.LiveSinceUtc), _pingWork);
         var st = PingStats.Of(_pingWork);
         // One spike threshold everywhere (card, graph strip, events): 50 ms, or 3× the recent median on slower links.
         var okMs = _pingWork.Where(p => p.Ms.HasValue && p.Utc >= now.AddSeconds(-60)).Select(p => p.Ms!.Value).OrderBy(x => x).ToList();
@@ -1066,7 +1079,7 @@ public partial class MainWindow : Window
         PingAvg.Text = PingStats.Ms(st.Avg);
         PingP95.Text = PingStats.Ms(st.P95);
         PingLoss.Text = st.Sent == 0 ? "—" : $"{st.LossPct:0.#}%";
-        PingHeader.ToolTip = status.Target is { } ip ? $"Pinging {ip} (this adapter's default gateway)" : null;
+        PingHeader.ToolTip = status.Target is { } ip ? (Privacy.On ? "Pinging your router" : $"Pinging {ip} (this adapter's default gateway)") : null;
         var recent = _pingWork.Where(p => p.Utc >= now.AddSeconds(-60)).Select(p => p.Ms ?? Math.Max(threshold, 100)).ToList();
         PingSpark.Max = Math.Max(20, recent.Count > 0 ? recent.Max() : 20);
         PingSpark.SetPoints(recent);
@@ -1080,7 +1093,7 @@ public partial class MainWindow : Window
 
         string sharedNote = status.SharedSubnet ? " Another adapter (e.g. Ethernet) is on the same network, so Windows may be sending these pings over it rather than Wi-Fi." : "";
         PingNote.Text = !_conn.Connected ? "Not connected." :
-            status.Error != null ? "Ping error: " + status.Error :
+            status.Error != null ? "Ping error: " + (Privacy.On ? "couldn't reach your router" : status.Error) :
             status.Target == null ? "No router address on this Wi-Fi adapter's network yet." :
             status.NoReplies ? "Your router doesn't answer pings, so latency can't be measured this way. (Pinging slowly in case that changes.)" :
             st.Sent < 5 ? "Collecting…" :

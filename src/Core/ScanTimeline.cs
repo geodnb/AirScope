@@ -40,12 +40,6 @@ public sealed class ScanTimeline
         get { lock (_lock) return _lastEndUtc == DateTime.MinValue ? null : _lastEndUtc; }
     }
 
-    /// <summary>Forget past scan periods (graph "Clear"), keeping any scan in progress and what's been learned.</summary>
-    public void ClearMarks()
-    {
-        lock (_lock) _marks.Clear();
-    }
-
     public void Clear()
     {
         lock (_lock) { _marks.Clear(); _ownStart = null; _lastEndUtc = DateTime.MinValue; }

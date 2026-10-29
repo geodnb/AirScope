@@ -21,6 +21,8 @@ public sealed class LiveGraph : FrameworkElement
     public RouterPinger? Pings { get; set; }
     /// <summary>Latency at which a ping counts as a spike (red); set by the window so card, strip and events agree.</summary>
     public double PingSpikeMs { get; set; } = 50;
+    /// <summary>Graph "Clear": ignore anything before this.</summary>
+    public DateTime SinceUtc { get; set; } = DateTime.MinValue;
     public double WindowSeconds { get; set; } = 120;
     public bool ShowRates { get; set; } = true;
     public bool Paused { get; private set; }
@@ -143,6 +145,13 @@ public sealed class LiveGraph : FrameworkElement
         else _marks.Clear();
         if (Pings != null) { Pings.CopySince(start.AddSeconds(-1), _pings); if (Paused) _pings.RemoveAll(p => p.Utc > now); }
         else _pings.Clear();
+        var cut = SinceUtc;
+        if (cut > start.AddSeconds(-2))
+        {
+            _work.RemoveAll(s => s.Utc < cut);
+            _marks.RemoveAll(m => m.EndUtc + ScanTimeline.Settle < cut);
+            _pings.RemoveAll(p => p.Utc < cut);
+        }
 
         // y-range: −95…−25 dBm, widened if data falls outside.
         double yMin = -95, yMax = -25;
@@ -285,7 +294,7 @@ public sealed class LiveGraph : FrameworkElement
                 dc.DrawLine(CrossPen, new Point(x, plot.Top), new Point(x, plot.Bottom));
                 dc.DrawEllipse(CrossDot, null, new Point(x, Y(b.Rssi)), 3, 3);
                 string txt = $"{b.Utc.ToLocalTime():HH:mm:ss.f}\n{b.Rssi} dBm   ↑{b.TxMbps:0}  ↓{b.RxMbps:0} Mbps" +
-                             (b.RetryPct is double r ? $"\nretries {r:0.0}% of {b.TxFrames} frames" : "");
+                             (b.RetryPct is double r ? $"\nretries {r:0.0}% ({b.TxFps:0} frames/s)" : "");
                 if (NearestPing(b.Utc) is PingSample ps) txt += ps.Ms is double pm ? $"\nrouter ping {PingStats.Ms(pm)} ms" : "\nrouter ping lost";
                 var scan = ScanAt(b.Utc);
                 if (scan is ScanMark sm) txt += sm.Own ? "\n(during an AirScope scan)" : "\n(around a Windows/other-app scan)";
