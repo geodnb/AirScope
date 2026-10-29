@@ -73,10 +73,11 @@ public sealed class ConnectionInfo
 /// <param name="TxFrames">Frames sent in the counter interval <paramref name="RetryPct"/> covers. Few frames = a noisy percentage.</param>
 /// <param name="TxFps">Those frames per second.</param>
 /// <param name="TxFpsAvg">Scan-free frames per second behind <paramref name="RetryAvgPct"/>.</param>
+/// <param name="TxRetries">Of <paramref name="TxFrames"/>, how many needed a retry.</param>
 /// <param name="RetrySeq">Which counter read produced <paramref name="RetryPct"/> (several samples share one), so each is counted once.</param>
 public readonly record struct LinkSample(DateTime Utc, int Rssi, double RxMbps, double TxMbps, double? RetryPct,
     double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false,
-    int TxFrames = 0, double TxFps = 0, double TxFpsAvg = 0, long RetrySeq = 0);
+    int TxFrames = 0, double TxFps = 0, double TxFpsAvg = 0, long RetrySeq = 0, int TxRetries = 0);
 
 /// <summary>When neighbour scans are allowed to take the radio off-channel.</summary>
 public enum ScanMode

@@ -38,8 +38,8 @@ public sealed class WifiMonitor : IDisposable
     private volatile bool _activeWanted;
     private int _forceScan;                                 // 1 = "Scan now" pressed
     private int _cacheDirty;                                // 1 = Windows refreshed its scan list since we last read it
-    private int _resetLive;                                 // 1 = graph "Clear" pressed; poll loop drops its rolling state
     private long _liveSinceTicks;                           // graph "Clear" cut-off (UTC ticks); 0 = none
+    private long _retrySeq;                                 // counter-read sequence; poll loop only
     private long _lastOwnScanTick = long.MinValue / 2;      // Environment.TickCount64 (monotonic); scan loop only
     private static readonly TimeSpan MinOwnScanGap = TimeSpan.FromSeconds(3);
 
@@ -77,7 +77,6 @@ public sealed class WifiMonitor : IDisposable
         Samples.Clear();
         Scans.Clear();
         Interlocked.Exchange(ref _liveSinceTicks, 0);
-        Interlocked.Exchange(ref _resetLive, 0);
         Interlocked.Exchange(ref _forceScan, 0);            // a "Scan now" for the old adapter doesn't carry over
         lock (_bssLock) _bss.Clear();
         _connection = new ConnectionInfo();
@@ -101,15 +100,11 @@ public sealed class WifiMonitor : IDisposable
     }
 
     /// <summary>
-    /// Start the live picture afresh (graph "Clear"). Nothing is deleted – samples, scan marks and pings stay for
-    /// signal-drop detection, spot tests and logging – the views just ignore anything before this moment, and the
-    /// poll loop restarts its rolling retry window.
+    /// Start the live picture afresh (graph "Clear"). Nothing is deleted or reset – samples, scan marks, pings and
+    /// the poll loop's figures carry on for signal-drop detection, spot tests and recording – the views just ignore
+    /// anything before this moment.
     /// </summary>
-    public void ResetLive()
-    {
-        Interlocked.Exchange(ref _liveSinceTicks, DateTime.UtcNow.Ticks);
-        Interlocked.Exchange(ref _resetLive, 1);
-    }
+    public void ResetLive() => Interlocked.Exchange(ref _liveSinceTicks, DateTime.UtcNow.Ticks);
 
     /// <summary>Views show data from here on (the last "Clear"), or everything if never cleared.</summary>
     public DateTime LiveSinceUtc
@@ -153,7 +148,7 @@ public sealed class WifiMonitor : IDisposable
         public double? RetryPct, RetryAvg;
         public int RetryFrames;
         public double RetryFps, RetryAvgFps;
-        public long RetrySeq;
+        public int RetryCount;
         public readonly Queue<(DateTime start, DateTime end, ulong dTx, ulong dRe)> RetryWin = new();
         public readonly List<LinkSample> Clean = new();
         public readonly List<ScanMark> Marks = new();
@@ -203,12 +198,6 @@ public sealed class WifiMonitor : IDisposable
     private void PollOnce(Guid iface, PollState st, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        if (Interlocked.Exchange(ref _resetLive, 0) == 1)
-        {
-            // Also skip the counter interval that straddles the Clear.
-            st.RetryWin.Clear(); st.RetryPct = null; st.RetryAvg = null; st.PrevCounters = null;
-            st.RetryFrames = 0; st.RetryFps = st.RetryAvgFps = 0;
-        }
         // Connection attributes change slowly; refresh them at ≤4 Hz.
         if ((now - st.LastConnQueryUtc).TotalMilliseconds >= 240 || st.PrevConn == null)
         {
@@ -241,8 +230,9 @@ public sealed class WifiMonitor : IDisposable
                 {
                     ulong dTx = k.tx - p.tx, dRe = k.retry - p.retry;
                     double secs = Math.Max(0.5, (now - from).TotalSeconds);   // intervals can be ~2 s at slow poll rates
-                    st.RetrySeq++;
+                    _retrySeq++;   // on the monitor, so it never repeats across adapter switches
                     st.RetryFrames = (int)Math.Min(int.MaxValue, dTx);
+                    st.RetryCount = (int)Math.Min(int.MaxValue, Math.Min(dRe, dTx));
                     st.RetryFps = dTx / secs;
                     // Under 20 frames there's no meaningful percentage – report nothing rather than hold an old figure.
                     st.RetryPct = dTx >= 20 ? Math.Min(100, 100.0 * dRe / dTx) : null;
@@ -258,7 +248,8 @@ public sealed class WifiMonitor : IDisposable
 
         if (ct.IsCancellationRequested) return;
         var s = new LinkSample(now, rssi, conn.RxMbps, conn.TxMbps, st.RetryPct, st.RetryAvg, Scans.OwnActive(now), st.PrevCounters != null,
-            st.RetryPct != null ? st.RetryFrames : 0, st.RetryFps, st.RetryAvgFps, st.RetryPct != null ? st.RetrySeq : 0);
+            st.RetryPct != null ? st.RetryFrames : 0, st.RetryFps, st.RetryAvgFps, st.RetryPct != null ? _retrySeq : 0,
+            st.RetryPct != null ? st.RetryCount : 0);
         Samples.Add(s);
         DetectSignalDrop(st, now);
         SampleTaken?.Invoke(s, conn);

@@ -41,7 +41,7 @@ public sealed class SpotTestResult
     public string StabilityText => $"±{RssiStdDev:0.0}";
     public string RetryText => RetryAvg is double r ? $"{r:0.0}%" : "—";
     [System.Text.Json.Serialization.JsonIgnore] public string SsidShown => Privacy.Name(Ssid);
-    [System.Text.Json.Serialization.JsonIgnore] public string LabelShown => Privacy.Text(Label);
+    [System.Text.Json.Serialization.JsonIgnore] public string LabelShown { get { Privacy.Register(Ssid); return Privacy.Text(Label); } }
     [System.Text.Json.Serialization.JsonIgnore] public string PingText => PingAvg is double a ? $"{PingStats.Ms(a)} / {PingStats.Ms(PingP95)}" : "—";
     [System.Text.Json.Serialization.JsonIgnore] public string LossText => PingLossPct is double l ? $"{l:0.#}%" : "—";
 }

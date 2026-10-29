@@ -321,8 +321,9 @@ public partial class MainWindow : Window
         _link["Tx link rate"].Text = $"{c.TxMbps:0} Mbps";
         _link["AP max PHY"].Text = ap?.MaxPhyMbps is double m ? $"{m:0} Mbps  ({(ap.Streams > 0 ? ap.Streams : 1)} stream{(ap.Streams > 1 ? "s" : "")})" : "—";
         // Below ~30 frames a second (an idle PC), a couple of retries look like a big percentage, so say so.
-        bool light = s.TxFpsAvg < LightTrafficFps;
-        _link["Retries"].Text = s.RetryAvgPct is double ra
+        var (avgPct, avgFps) = ShownRetry(s);
+        bool light = avgFps < LightTrafficFps;
+        _link["Retries"].Text = avgPct is double ra
             ? (light ? $"≈{ra:0}% · light traffic" : $"{ra:0.0}% avg" + (_retryPeak is double pk && pk >= ra + 3 ? $" · peak {pk:0}%" : ""))
             : !s.CountersOk ? "not reported by driver"
             : s.RetryPct is double && _mon.Scans.Overlaps(DateTime.UtcNow.AddSeconds(-11), DateTime.UtcNow) ? "scans too frequent for a clean figure"
@@ -763,7 +764,8 @@ public partial class MainWindow : Window
                     if (_logger != lg) return;
                     _logger = null; lg.Dispose();
                     RecordBtn.IsChecked = false; RecText.Text = "Record";
-                    AddEvent(new EventEntry { Kind = EventKind.Warning, Text = "Recording stopped — couldn't write log: " + msg });
+                    // The error text usually contains the full path (with your Windows user name).
+                    AddEvent(new EventEntry { Kind = EventKind.Warning, Text = "Recording stopped — couldn't write log" + (Privacy.On ? "" : ": " + msg) });
                 });
                 _logger = lg;
                 RecText.Text = "Recording…";
@@ -868,6 +870,31 @@ public partial class MainWindow : Window
 
     private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
 
+    private readonly List<LinkSample> _retryWork = new();
+
+    /// <summary>
+    /// The 10 s retry average for the screen. Normally the monitor's own figure; for 10 s after a graph Clear,
+    /// recomputed from just the counter reads since then (the monitor's figure, used by recordings, carries on).
+    /// </summary>
+    private (double? pct, double fps) ShownRetry(LinkSample s)
+    {
+        var now = DateTime.UtcNow;
+        var cut = _mon?.LiveSinceUtc ?? DateTime.MinValue;
+        if (_mon == null || now - cut > TimeSpan.FromSeconds(10.5)) return (s.RetryAvgPct, s.TxFpsAvg);
+        _mon.Samples.CopySince(cut, _retryWork);
+        long tx = 0, re = 0; double secs = 0; long lastSeq = -1;
+        foreach (var x in _retryWork)
+        {
+            if (x.RetrySeq <= 0 || x.RetrySeq == lastSeq || x.TxFrames <= 0 || x.TxFps <= 0) continue;
+            lastSeq = x.RetrySeq;
+            double len = x.TxFrames / x.TxFps;
+            var from = x.Utc.AddSeconds(-len);
+            if (from < cut || _mon.Scans.Overlaps(from, x.Utc)) continue;   // straddles the Clear, or a scan
+            tx += x.TxFrames; re += x.TxRetries; secs += len;
+        }
+        return (tx >= 50 ? Math.Min(100, 100.0 * re / tx) : null, secs > 0 ? tx / secs : 0);
+    }
+
     /// <summary>
     /// Start the graph and its stats afresh. Nothing is deleted (spot tests, drop detection and recording carry on
     /// unaffected); the views just ignore anything before now.
@@ -877,7 +904,6 @@ public partial class MainWindow : Window
         if (_mon == null) return;
         _mon.ResetLive();
         Live.SinceUtc = _mon.LiveSinceUtc;
-        ResetPingEvents();
         _retryPeak = null;
         _lastStatsUtc = DateTime.MinValue;
         StatMin.Text = StatAvg.Text = StatMax.Text = StatJit.Text = "—";
@@ -1057,7 +1083,7 @@ public partial class MainWindow : Window
 
     private static bool IsSpike(PingSample p, double threshold) => p.Ms is not double ms || ms >= threshold;
 
-    private readonly List<PingSample> _spikeWork = new(), _spikeClean = new();
+    private readonly List<PingSample> _spikeWork = new(), _spikeClean = new(), _evalWork = new();
 
     /// <summary>Once a second: refresh the ping card, and report latency spikes that weren't caused by a scan.</summary>
     private void UpdatePing(DateTime now)
@@ -1108,8 +1134,15 @@ public partial class MainWindow : Window
         {
             // Until the router has answered once, losses mean "doesn't answer pings", not a bad link.
             if (status.AnyReply && !status.NoReplies)
-                foreach (var p in _spikeClean)
-                    if (p.Utc > _pingEvalUpTo && p.Utc <= evalTo) _pending.Add(p);
+            {
+                // Judged on all pings, not just those since the last graph Clear.
+                _pinger.CopySince(_pingEvalUpTo, _evalWork);
+                _spikeWork.Clear();
+                foreach (var p in _evalWork) if (p.Utc > _pingEvalUpTo && p.Utc <= evalTo && IsSpike(p, threshold)) _spikeWork.Add(p);
+                _mon.Scans.CopySince(_pingEvalUpTo.AddSeconds(-10), now, _marksWork);
+                ScanTimeline.ExcludeCovered(_spikeWork, p => p.Utc, _marksWork, _spikeClean);
+                _pending.AddRange(_spikeClean);
+            }
             _pingEvalUpTo = evalTo;
         }
         if (!status.AnyReply || status.NoReplies) _pending.Clear();

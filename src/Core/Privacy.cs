@@ -14,7 +14,6 @@ public static class Privacy
     private static readonly object Lock = new();
     private static readonly Dictionary<string, string> Names = new();
     private static readonly Dictionary<string, string> Macs = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Regex MacPattern = new(@"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b", RegexOptions.Compiled);
     private static volatile string _ownSsid = "";
 
     public static bool On { get => _on; set => _on = value; }
@@ -46,29 +45,41 @@ public static class Privacy
     }
 
     /// <summary>
-    /// Fallback for free text (e.g. spot-test labels): masks MAC addresses and any network name AirScope has seen,
-    /// in one pass and only as whole words, so stand-ins can't be re-masked and "ch 100" stays "ch 100" unless a
-    /// network is literally called "100". Events don't rely on this – they keep names separate.
+    /// Fallback for free text (e.g. spot-test labels, non-network event text): masks MAC addresses and any network
+    /// name AirScope has seen, in a single pass and only as whole words, so a stand-in is never masked again and
+    /// "ch 100" stays "ch 100" unless a network is literally called "100". Events about networks don't rely on
+    /// this – they keep names separate.
     /// </summary>
     public static string Text(string text)
     {
         if (!_on || string.IsNullOrEmpty(text)) return text;
-        text = MacPattern.Replace(text, m => Mac(m.Value));
-        var names = new List<string>();
-        lock (Lock) names.AddRange(Seen);
-        if (_ownSsid.Length > 0) names.Add(_ownSsid);
-        names = names.Where(n => n.Length > 0).Distinct().OrderByDescending(n => n.Length).ToList();
-        if (names.Count == 0) return text;
-        var rx = new Regex(@"(?<![\w])(" + string.Join("|", names.Select(Regex.Escape)) + @")(?![\w])");
-        return rx.Replace(text, m => Name(m.Value));
+        return Combined().Replace(text, m => m.Groups["mac"].Success ? Mac(m.Value) : Name(m.Value));
     }
 
     /// <summary>Remember a network name so free text mentioning it can be masked later. Safe from any thread.</summary>
     public static void Register(string ssid)
     {
         if (string.IsNullOrEmpty(ssid)) return;
-        lock (Lock) Seen.Add(ssid);
+        lock (Lock) if (Seen.Add(ssid)) _rx = null;
     }
 
     private static readonly HashSet<string> Seen = new();
+    private static Regex? _rx;
+    private static string _rxOwn = "";
+
+    /// <summary>Built only when the set of names (or the own network) changes.</summary>
+    private static Regex Combined()
+    {
+        lock (Lock)
+        {
+            string own = _ownSsid;
+            if (own.Length > 0 && Seen.Add(own)) _rx = null;
+            if (_rx != null && own == _rxOwn) return _rx;
+            var names = Seen.Where(n => n.Length > 0).OrderByDescending(n => n.Length).Select(Regex.Escape).ToList();
+            string mac = @"(?<mac>\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b)";
+            string pattern = names.Count == 0 ? mac : mac + @"|(?<![\w])(?:" + string.Join("|", names) + @")(?![\w])";
+            _rxOwn = own;
+            return _rx = new Regex(pattern, RegexOptions.CultureInvariant);
+        }
+    }
 }
