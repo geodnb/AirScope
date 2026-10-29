@@ -1,0 +1,433 @@
+<Window x:Class="AirScope.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:AirScope.UI"
+        Title="AirScope — Wi-Fi Analyser" Width="1320" Height="860" MinWidth="1080" MinHeight="620"
+        Style="{StaticResource AppWindow}"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <ui:InverseBoolConverter x:Key="Not"/>
+        <DataTemplate x:Key="SsidCell">
+            <DockPanel Opacity="{Binding Opacity}" ToolTip="{Binding Ssid}">
+                <TextBlock DockPanel.Dock="Left" Text="{Binding ConnectedMark}" Foreground="{StaticResource Accent}" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                <Ellipse DockPanel.Dock="Left" Width="8" Height="8" Fill="{Binding SsidBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding Ssid}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="SignalCell">
+            <StackPanel Orientation="Horizontal" Opacity="{Binding Opacity}">
+                <ui:SignalMeter Rssi="{Binding Rssi}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Text="{Binding Rssi}" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center"/>
+            </StackPanel>
+        </DataTemplate>
+        <Style x:Key="CellText" TargetType="TextBlock">
+            <Setter Property="Opacity" Value="{Binding Opacity}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        </Style>
+        <Style x:Key="MonoCell" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+            <Setter Property="FontFamily" Value="{StaticResource MonoFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="28"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===== Header ===== -->
+        <Grid Grid.Row="0" Margin="16,14,16,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource AccentSoft}" Margin="0,0,10,0">
+                    <Path Data="M3,10 Q12,2 21,10 M6,13.5 Q12,8 18,13.5 M9,17 Q12,14.5 15,17 M12,20.5 L12,20.6" Stroke="{StaticResource Accent}"
+                          StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Stretch="None" Margin="3,3,0,0"/>
+                </Border>
+                <TextBlock Text="AirScope" FontSize="19" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <ComboBox x:Name="AdapterBox" Width="300" Margin="20,0,0,0" VerticalAlignment="Center"
+                          SelectionChanged="AdapterBox_SelectionChanged" ToolTip="Wi-Fi adapter"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="ScanNowBtn" Content="⟳  Scan now" Click="ScanNow_Click" Margin="0,0,8,0" ToolTip="Ask the adapter to scan immediately"/>
+                <ToggleButton x:Name="RecordBtn" Style="{StaticResource Chip}" Padding="12,6" Click="Record_Click"
+                              ToolTip="Record live samples and scans to CSV (Documents\AirScope\Logs)">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="RecDot" Width="9" Height="9" Fill="{StaticResource BadBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="RecText" Text="Record"/>
+                    </StackPanel>
+                </ToggleButton>
+                <Button Content="▣  Mini" Click="Mini_Click" Margin="0,0,8,0" ToolTip="Compact always-on-top signal monitor"/>
+                <ToggleButton x:Name="SettingsBtn" Style="{StaticResource Chip}" Padding="10,6" Content="⚙" FontSize="14" ToolTip="Settings"
+                              IsHitTestVisible="{Binding IsOpen, ElementName=SettingsPopup, Converter={StaticResource Not}}"/>
+                <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=SettingsBtn}" Placement="Bottom" HorizontalOffset="-250"
+                       IsOpen="{Binding IsChecked, ElementName=SettingsBtn}" StaysOpen="False" AllowsTransparency="True"
+                       Closed="SettingsPopup_Closed">
+                    <Border Style="{StaticResource Card}" Width="300" Margin="0,6,0,0" Background="{StaticResource Panel2}">
+                        <StackPanel>
+                            <TextBlock Text="LIVE POLL RATE" Style="{StaticResource H}"/>
+                            <ComboBox x:Name="PollBox" SelectionChanged="PollBox_SelectionChanged" Margin="0,0,0,14"/>
+                            <TextBlock Text="NEIGHBOUR SCAN INTERVAL" Style="{StaticResource H}"/>
+                            <ComboBox x:Name="ScanBox" SelectionChanged="ScanBox_SelectionChanged" Margin="0,0,0,6"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,0,0,14"
+                                       Text="Each scan briefly takes the radio off-channel. Short intervals can add small latency spikes while gaming — 10 s+ is gentler."/>
+                            <CheckBox x:Name="MiniTopCheck" Content="Mini window stays on top" Click="MiniTop_Click" Margin="0,0,0,14"/>
+                            <Button Content="Open logs folder" Click="OpenLogs_Click" HorizontalAlignment="Stretch" Margin="0,0,0,6"/>
+                            <Button Content="Windows location settings" Click="OpenLocation_Click" HorizontalAlignment="Stretch"/>
+                            <TextBlock x:Name="AboutText" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,14,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </StackPanel>
+        </Grid>
+
+        <!-- ===== Privacy banner ===== -->
+        <Border x:Name="PrivacyBanner" Grid.Row="1" Margin="16,0,16,12" Padding="14,10" CornerRadius="10"
+                Background="#1FFACC15" BorderBrush="#66FACC15" BorderThickness="1" Visibility="Collapsed">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Open Location settings" Click="OpenLocation_Click" Style="{StaticResource AccentButton}"/>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Windows is hiding nearby networks from AirScope" FontWeight="SemiBold"/>
+                    <TextBlock Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,12,0"
+                               Text="Recent Windows 11 builds require Location access for Wi-Fi scans. Turn on Location services and 'Let desktop apps access your location'. The live signal for your own connection still works."/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Border x:Name="NoAdapterBanner" Grid.Row="1" Margin="16,0,16,12" Padding="14,10" CornerRadius="10"
+                Background="#1FF87171" BorderBrush="#66F87171" BorderThickness="1" Visibility="Collapsed">
+            <TextBlock x:Name="NoAdapterText" TextWrapping="Wrap"/>
+        </Border>
+
+        <!-- ===== Tabs ===== -->
+        <TabControl x:Name="Tabs" Grid.Row="2" Style="{StaticResource NavTabs}" SelectionChanged="Tabs_SelectionChanged">
+
+            <!-- LIVE -->
+            <TabItem Header="Live">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="330"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="CURRENT CONNECTION" Style="{StaticResource H}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="BigRssi" Text="—" FontSize="56" FontWeight="SemiBold" FontFamily="{StaticResource MonoFont}"/>
+                                        <StackPanel VerticalAlignment="Bottom" Margin="8,0,0,12">
+                                            <TextBlock Text="dBm" Foreground="{StaticResource Muted}"/>
+                                            <TextBlock x:Name="QualityText" Text="" FontWeight="SemiBold"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <ui:ScoreBar x:Name="QualityBar" Height="8" Margin="0,2,0,4" HorizontalAlignment="Stretch"/>
+                                    <TextBlock x:Name="ConnSsid" Text="Not connected" FontSize="17" FontWeight="SemiBold" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock x:Name="ConnSub" Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="LINK" Style="{StaticResource H}"/>
+                                    <Grid x:Name="LinkGrid">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock x:Name="StatsHeader" Text="SIGNAL OVER WINDOW" Style="{StaticResource H}"/>
+                                    <UniformGrid Columns="4">
+                                        <StackPanel><TextBlock Text="Min" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="StatMin" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="Avg" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="StatAvg" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="Max" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="StatMax" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="Jitter" Foreground="{StaticResource Muted}" FontSize="11.5" ToolTip="Standard deviation of RSSI – lower is steadier"/><TextBlock x:Name="StatJit" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                    </UniformGrid>
+                                    <TextBlock x:Name="StatNote" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="12"/>
+                            <RowDefinition Height="210"/>
+                        </Grid.RowDefinitions>
+                        <Border Style="{StaticResource Card}">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                                    <TextBlock Text="LIVE SIGNAL" Style="{StaticResource H}" Margin="0" VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <CheckBox x:Name="RatesCheck" Content="Link rates" Click="RatesCheck_Click" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                                        <StackPanel x:Name="WindowChips" Orientation="Horizontal"/>
+                                        <Button x:Name="PauseBtn" Content="❚❚" Click="Pause_Click" Padding="10,4" Margin="6,0,0,0" ToolTip="Freeze the graph (hover to inspect)"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <ui:LiveGraph x:Name="Live"/>
+                            </DockPanel>
+                        </Border>
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top">
+                                    <TextBlock Text="EVENTS" Style="{StaticResource H}"/>
+                                    <Button Content="Clear" HorizontalAlignment="Right" Padding="8,2" FontSize="11" Click="ClearEvents_Click" VerticalAlignment="Top"/>
+                                </DockPanel>
+                                <ListBox x:Name="EventList">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Left" Text="{Binding TimeText}" Foreground="{StaticResource Muted}" FontFamily="{StaticResource MonoFont}" Width="70"/>
+                                                <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Width="20" FontWeight="Bold" x:Name="ic"/>
+                                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap"/>
+                                            </DockPanel>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Kind}" Value="Roam"><Setter TargetName="ic" Property="Foreground" Value="#7AA2FF"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="Disconnect"><Setter TargetName="ic" Property="Foreground" Value="#F87171"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="Connect"><Setter TargetName="ic" Property="Foreground" Value="#4ADE80"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="Warning"><Setter TargetName="ic" Property="Foreground" Value="#FACC15"/></DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- NETWORKS -->
+            <TabItem Header="Networks">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10">
+                        <Grid Width="300">
+                            <TextBox x:Name="FilterBox" TextChanged="Filter_Changed"/>
+                            <TextBlock Text="Filter by SSID, BSSID, vendor, security…" Foreground="{StaticResource Muted}" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" IsHitTestVisible="False" x:Name="FilterHint"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+                            <ToggleButton x:Name="F24" Content="2.4 GHz" Style="{StaticResource Chip}" IsChecked="True" Click="Filter_Click"/>
+                            <ToggleButton x:Name="F5" Content="5 GHz" Style="{StaticResource Chip}" IsChecked="True" Click="Filter_Click"/>
+                            <ToggleButton x:Name="F6" Content="6 GHz" Style="{StaticResource Chip}" IsChecked="True" Click="Filter_Click"/>
+                            <CheckBox x:Name="ShowStaleCheck" Content="Include out-of-range" IsChecked="True" Click="Filter_Click" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            <CheckBox x:Name="GroupCheck" Content="One row per SSID" Click="Filter_Click" Margin="16,0,0,0" VerticalAlignment="Center"
+                                      ToolTip="Show only the strongest access point for each network name"/>
+                        </StackPanel>
+                        <TextBlock x:Name="NetCount" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource Muted}"/>
+                    </DockPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="300"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource Card}" Padding="0">
+                            <DataGrid x:Name="NetGrid" SelectionChanged="Grid_SelectionChanged" Sorting="Grid_Sorting">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="Network" CellTemplate="{StaticResource SsidCell}" SortMemberPath="Ssid" Width="190"/>
+                                    <DataGridTemplateColumn Header="Signal" CellTemplate="{StaticResource SignalCell}" SortMemberPath="Rssi" SortDirection="Descending" Width="82"/>
+                                    <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" ElementStyle="{StaticResource CellText}" Width="46"/>
+                                    <DataGridTextColumn Header="Band" Binding="{Binding Band}" SortMemberPath="BandOrder" ElementStyle="{StaticResource CellText}" Width="66"/>
+                                    <DataGridTextColumn Header="Width" Binding="{Binding WidthText}" SortMemberPath="Width" ElementStyle="{StaticResource CellText}" Width="58"/>
+                                    <DataGridTextColumn Header="Gen" Binding="{Binding Gen}" SortMemberPath="GenOrder" ElementStyle="{StaticResource CellText}" Width="70"/>
+                                    <DataGridTextColumn Header="Security" Binding="{Binding Security}" ElementStyle="{StaticResource CellText}" Width="140"/>
+                                    <DataGridTextColumn Header="MIMO" Binding="{Binding Streams}" ElementStyle="{StaticResource CellText}" Width="52"/>
+                                    <DataGridTextColumn Header="Clients" Binding="{Binding Clients}" SortMemberPath="ClientsOrder" ElementStyle="{StaticResource CellText}" Width="60"/>
+                                    <DataGridTextColumn Header="Busy" Binding="{Binding Utilisation}" SortMemberPath="UtilisationOrder" ElementStyle="{StaticResource CellText}" Width="54"/>
+                                    <DataGridTextColumn Header="AP max" Binding="{Binding MaxRate}" SortMemberPath="MaxRateOrder" ElementStyle="{StaticResource CellText}" Width="64"/>
+                                    <DataGridTextColumn Header="Vendor" Binding="{Binding Vendor}" ElementStyle="{StaticResource CellText}" Width="140"/>
+                                    <DataGridTextColumn Header="BSSID" Binding="{Binding Bssid}" ElementStyle="{StaticResource MonoCell}" Width="140"/>
+                                    <DataGridTextColumn Header="Flags" Binding="{Binding Flags}" ElementStyle="{StaticResource CellText}" Width="90"/>
+                                    <DataGridTextColumn Header="" Binding="{Binding Dfs}" ElementStyle="{StaticResource CellText}" Width="40"/>
+                                    <DataGridTextColumn Header="Seen" Binding="{Binding LastSeen}" ElementStyle="{StaticResource CellText}" Width="50"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource Card}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock Text="DETAILS" Style="{StaticResource H}"/>
+                                    <TextBlock x:Name="DetTitle" Text="Select a network" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="DetSub" Foreground="{StaticResource Muted}" Margin="0,2,0,10" TextWrapping="Wrap"/>
+                                    <ui:Sparkline x:Name="DetSpark" Height="60" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="DetSparkLabel" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,0,0,10"/>
+                                    <Grid x:Name="DetGrid">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                    </Grid>
+                                    <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"
+                                               Text="Tip: Ctrl/Shift-click several rows to highlight them on the Channels and History tabs."/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <!-- CHANNELS -->
+            <TabItem Header="Channels">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                        <RadioButton x:Name="ChAll" Content="All bands" GroupName="chb" Style="{StaticResource ChipRadio}" IsChecked="True" Click="ChBand_Click"/>
+                        <RadioButton x:Name="Ch24" Content="2.4 GHz" GroupName="chb" Style="{StaticResource ChipRadio}" Click="ChBand_Click"/>
+                        <RadioButton x:Name="Ch5" Content="5 GHz" GroupName="chb" Style="{StaticResource ChipRadio}" Click="ChBand_Click"/>
+                        <RadioButton x:Name="Ch6" Content="6 GHz" GroupName="chb" Style="{StaticResource ChipRadio}" Click="ChBand_Click"/>
+                        <TextBlock Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"
+                                   Text="Shapes span each network's full channel width · white outline = your connection · hover for details, click to select"/>
+                    </StackPanel>
+                    <Grid x:Name="ChannelGrid">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Border x:Name="Card24" Style="{StaticResource Card}" Margin="0,0,0,10">
+                            <DockPanel>
+                                <TextBlock x:Name="Head24" DockPanel.Dock="Top" Text="2.4 GHz" Style="{StaticResource H}" Margin="0,0,0,4"/>
+                                <ui:ChannelGraph x:Name="G24" Band="Band24"/>
+                            </DockPanel>
+                        </Border>
+                        <Border x:Name="Card5" Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
+                            <DockPanel>
+                                <TextBlock x:Name="Head5" DockPanel.Dock="Top" Text="5 GHz" Style="{StaticResource H}" Margin="0,0,0,4"/>
+                                <ui:ChannelGraph x:Name="G5" Band="Band5"/>
+                            </DockPanel>
+                        </Border>
+                        <Border x:Name="Card6" Grid.Row="2" Style="{StaticResource Card}">
+                            <DockPanel>
+                                <TextBlock x:Name="Head6" DockPanel.Dock="Top" Text="6 GHz" Style="{StaticResource H}" Margin="0,0,0,4"/>
+                                <ui:ChannelGraph x:Name="G6" Band="Band6"/>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- HISTORY -->
+            <TabItem Header="History">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                        <RadioButton x:Name="HSel" Content="Selected networks" GroupName="hm" Style="{StaticResource ChipRadio}" IsChecked="True" Click="History_Click"/>
+                        <RadioButton x:Name="HTop" Content="Strongest 10" GroupName="hm" Style="{StaticResource ChipRadio}" Click="History_Click"/>
+                        <RadioButton x:Name="HMine" Content="My network (all APs)" GroupName="hm" Style="{StaticResource ChipRadio}" Click="History_Click"/>
+                        <Border Width="1" Background="{StaticResource LineBrush}" Margin="10,2"/>
+                        <RadioButton x:Name="H5" Content="5 min" GroupName="hw" Style="{StaticResource ChipRadio}" Click="History_Click"/>
+                        <RadioButton x:Name="H10" Content="10 min" GroupName="hw" Style="{StaticResource ChipRadio}" IsChecked="True" Click="History_Click"/>
+                        <RadioButton x:Name="H30" Content="30 min" GroupName="hw" Style="{StaticResource ChipRadio}" Click="History_Click"/>
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Bottom" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Neighbour signal comes from scans, so it updates at the scan interval. Your own link's fast trace is on the Live tab."/>
+                            <ui:HistoryGraph x:Name="Hist"/>
+                        </DockPanel>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
+            <!-- ADVISOR -->
+            <TabItem Header="Advisor">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <CheckBox x:Name="ExcludeOwnCheck" Content="Ignore my own router's networks" Click="ExcludeOwn_Click" VerticalAlignment="Center"/>
+                        <TextBlock Foreground="{StaticResource Muted}" Margin="16,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Text="Score = how much neighbour signal overlaps each channel block, weighted by their strength and how busy they report being. 100 is clean air."/>
+                    </DockPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="AdvisorPanel"/>
+                    </ScrollViewer>
+                </DockPanel>
+            </TabItem>
+
+            <!-- SPOT TESTS -->
+            <TabItem Header="Spot tests">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="12"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="MEASURE &amp; COMPARE" Style="{StaticResource H}"/>
+                            <TextBlock Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,12"
+                                       Text="Records your link for a fixed time and keeps the result, so you can compare setups fairly — e.g. stock vs new antennas, router position, channel or band. Keep the PC still during a run."/>
+                            <StackPanel Orientation="Horizontal">
+                                <Grid Width="280">
+                                    <TextBox x:Name="SpotLabel" TextChanged="SpotLabel_Changed"/>
+                                    <TextBlock x:Name="SpotHint" Text="Label, e.g. 'Stock antennas, desk'" Foreground="{StaticResource Muted}" Margin="10,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                                </Grid>
+                                <ComboBox x:Name="SpotDuration" Width="110" Margin="10,0,0,0"/>
+                                <Button x:Name="SpotRun" Content="Start test" Style="{StaticResource AccentButton}" Margin="10,0,0,0" Click="SpotRun_Click"/>
+                                <Grid Width="220" Margin="16,0,0,0" VerticalAlignment="Center">
+                                    <Border Height="8" CornerRadius="4" Background="{StaticResource LineBrush}"/>
+                                    <Border x:Name="SpotProgress" Height="8" CornerRadius="4" Background="{StaticResource Accent}" HorizontalAlignment="Left" Width="0"/>
+                                </Grid>
+                                <TextBlock x:Name="SpotStatus" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="14,12,14,8">
+                                <Button Content="Set as baseline" Click="SpotBaseline_Click" Margin="0,0,8,0"/>
+                                <Button Content="Delete" Click="SpotDelete_Click" Margin="0,0,8,0"/>
+                                <Button Content="Export CSV" Click="SpotExport_Click"/>
+                                <TextBlock Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"
+                                           Text="Δ columns compare each run with the baseline (★). +dB is better."/>
+                            </StackPanel>
+                            <DataGrid x:Name="SpotGrid" SelectionMode="Extended">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="" Binding="{Binding BaselineMark}" Width="28"/>
+                                    <DataGridTextColumn Header="Label" Binding="{Binding Label}" Width="200"/>
+                                    <DataGridTextColumn Header="Taken" Binding="{Binding TakenText}" SortMemberPath="TakenLocal" Width="100"/>
+                                    <DataGridTextColumn Header="Network" Binding="{Binding Ssid}" Width="130"/>
+                                    <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="66"/>
+                                    <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" Width="44"/>
+                                    <DataGridTextColumn Header="Avg dBm" Binding="{Binding RssiText}" SortMemberPath="RssiAvg" Width="70"/>
+                                    <DataGridTextColumn Header="Δ dB" Binding="{Binding DeltaRssi}" Width="64"/>
+                                    <DataGridTextColumn Header="Range" Binding="{Binding RangeText}" Width="80"/>
+                                    <DataGridTextColumn Header="Jitter" Binding="{Binding StabilityText}" SortMemberPath="RssiStdDev" Width="60"/>
+                                    <DataGridTextColumn Header="Tx Mbps" Binding="{Binding TxText}" SortMemberPath="TxAvg" Width="70"/>
+                                    <DataGridTextColumn Header="Δ Tx" Binding="{Binding DeltaTx}" Width="64"/>
+                                    <DataGridTextColumn Header="Rx Mbps" Binding="{Binding RxText}" SortMemberPath="RxAvg" Width="70"/>
+                                    <DataGridTextColumn Header="Retries" Binding="{Binding RetryText}" Width="64"/>
+                                    <DataGridTextColumn Header="Roams" Binding="{Binding Roams}" Width="60"/>
+                                    <DataGridTextColumn Header="Length" Binding="{Binding LengthText}" Width="60"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- ===== Status bar ===== -->
+        <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0">
+            <DockPanel Margin="16,0">
+                <TextBlock x:Name="StatusRight" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusLeft" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>
