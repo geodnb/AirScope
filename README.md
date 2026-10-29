@@ -14,6 +14,9 @@ AirScope shows you what your Wi-Fi is really doing: a live, smooth signal graph 
 
 It was built as a better alternative to the WiFi Analyzer app commonly used on Windows, which can feel laggy, basic and unreliable.
 
+<img width="1660" height="1056" alt="Screenshot 2026-10-29 032707" src="https://github.com/user-attachments/assets/623eafc6-0157-488f-9b84-1b7035c1f9fb" />
+
+
 ---
 
 ## Contents
