@@ -63,18 +63,14 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
     </td>
   </tr>
   <tr>
-    <td width="50%" valign="top">
-      <a href="docs/screenshots/spot-tests.png"><img src="docs/screenshots/spot-tests.png" alt="Spot tests tab: saved measurements compared against a baseline"></a>
+    <td colspan="2" valign="top" align="center">
+      <a href="docs/screenshots/spot-tests.png"><img src="docs/screenshots/spot-tests.png" alt="Spot tests tab: saved measurements compared against a baseline" width="50%"></a>
       <br><sub><b>Spot tests</b> · timed measurements compared against a baseline</sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/screenshots/mini.png"><img src="docs/screenshots/mini.png" alt="Mini mode: small always-on-top signal monitor"></a>
-      <br><sub><b>Mini mode</b> · small always-on-top monitor for a second screen or over a game</sub>
     </td>
   </tr>
 </table>
 
-<sub>Screenshots taken with Screenshot mode on, so network names and addresses are replaced with stand-ins.</sub>
+<sub>Network names and addresses are replaced with stand-ins, as Screenshot mode does.</sub>
 
 ---
 
