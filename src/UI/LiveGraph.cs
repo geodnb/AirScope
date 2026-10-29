@@ -11,15 +11,24 @@ namespace AirScope.UI;
 /// instead of jumping once per poll – the main cause of the "laggy" feel in other tools.
 /// Long windows are decimated into time-aligned buckets (stable, no shimmer) and draw a
 /// faint min/max envelope so brief drops are still visible.
+/// Scan periods are shaded so off-channel glitches aren't mistaken for signal problems, and when router
+/// ping is on a thin strip along the bottom shows each ping's latency.
 /// </summary>
 public sealed class LiveGraph : FrameworkElement
 {
     public SampleBuffer? Buffer { get; set; }
+    public ScanTimeline? Scans { get; set; }
+    public RouterPinger? Pings { get; set; }
+    /// <summary>Latency at which a ping counts as a spike (red); set by the window so card, strip and events agree.</summary>
+    public double PingSpikeMs { get; set; } = 50;
     public double WindowSeconds { get; set; } = 120;
     public bool ShowRates { get; set; } = true;
     public bool Paused { get; private set; }
 
     private readonly List<LinkSample> _work = new();
+    private readonly List<ScanMark> _marks = new();
+    private readonly List<PingSample> _pings = new();
+    private sbyte[] _pingCols = Array.Empty<sbyte>();
     private DateTime _frozenNow;
     private TimeSpan _lastRender;
     private DateTime _lastDrawnNow;
@@ -40,6 +49,14 @@ public sealed class LiveGraph : FrameworkElement
     private static readonly Brush HeadHalo = Palette.B(Palette.Accent, 0.25);
     private static readonly Brush HeadDot = Palette.B(Palette.Accent);
     private static readonly Brush CrossDot = Palette.B(Palette.Text);
+    private static readonly Brush OwnScanBrush = Palette.B(Palette.Accent2, 0.10);
+    private static readonly Brush ExtScanBrush = Palette.B(Palette.Fair, 0.07);
+    private static readonly Pen ExtScanPen = Palette.P(Palette.Fair, 1, 0.35, DashStyles.Dot);
+    private static readonly Brush PingGood = Palette.B(Palette.Good, 0.55);
+    private static readonly Brush PingFair = Palette.B(Palette.Fair, 0.85);
+    private static readonly Brush PingBad = Palette.B(Palette.Bad);
+    private const double PingStrip = 5;
+    private static readonly Pen SwatchPen = Palette.P(Palette.Line, 1);
     private static readonly Brush TipBg = Palette.B(Palette.Panel2, 0.96);
     private static readonly Pen TipPen = Palette.P(Palette.Line, 1);
     private static readonly (double lo, double hi, Brush b)[] Bands =
@@ -80,7 +97,9 @@ public sealed class LiveGraph : FrameworkElement
     {
         if (!IsVisible || Paused || _host?.WindowState == WindowState.Minimized) return;
         var t = ((RenderingEventArgs)e).RenderingTime;
-        if ((t - _lastRender).TotalMilliseconds < 15) return;
+        // Full frame rate only when someone's looking: behind a game, ~12 fps is plenty and cheaper.
+        double minGapMs = _host?.IsActive == false ? 80 : 15;
+        if ((t - _lastRender).TotalMilliseconds < minGapMs) return;
         // Skip frames where the plot hasn't scrolled by at least half a pixel and nothing else changed.
         double secPerHalfPx = WindowSeconds / Math.Max(50, ActualWidth - 60) / 2;
         if (!_dirty && (DateTime.UtcNow - _lastDrawnNow).TotalSeconds < secPerHalfPx) return;
@@ -120,6 +139,10 @@ public sealed class LiveGraph : FrameworkElement
         var start = now.AddSeconds(-WindowSeconds);
         Buffer?.CopySince(start.AddSeconds(-2), _work);
         if (Paused) _work.RemoveAll(s => s.Utc > now);   // a true freeze: ignore samples after the pause
+        if (Scans != null) { Scans.CopySince(start, now, _marks); if (Paused) _marks.RemoveAll(m => m.StartUtc > now); }
+        else _marks.Clear();
+        if (Pings != null) { Pings.CopySince(start.AddSeconds(-1), _pings); if (Paused) _pings.RemoveAll(p => p.Utc > now); }
+        else _pings.Clear();
 
         // y-range: −95…−25 dBm, widened if data falls outside.
         double yMin = -95, yMax = -25;
@@ -151,6 +174,22 @@ public sealed class LiveGraph : FrameworkElement
             dc.DrawText(ft, new Point(Math.Clamp(x - ft.Width / 2, plot.Left, plot.Right - ft.Width), plot.Bottom + 4));
         }
         dc.DrawRectangle(null, AxisPen, plot);
+
+        // Scan periods: the radio was off-channel, so dips/retries/latency here are the scan, not the link.
+        dc.PushClip(new RectangleGeometry(plot));
+        foreach (var mk in _marks)
+        {
+            double x0 = X(mk.StartUtc), x1 = Math.Max(x0 + 2, X(mk.EndUtc + ScanTimeline.Settle));
+            if (x1 < plot.Left || x0 > plot.Right) continue;
+            if (mk.Own) dc.DrawRectangle(OwnScanBrush, null, new Rect(x0, plot.Top, x1 - x0, plot.Height));
+            else
+            {
+                dc.DrawRectangle(ExtScanBrush, null, new Rect(x0, plot.Top, x1 - x0, plot.Height));
+                double xe = X(mk.EndUtc);
+                dc.DrawLine(ExtScanPen, new Point(xe, plot.Top), new Point(xe, plot.Bottom));
+            }
+        }
+        dc.Pop();
 
         if (_work.Count < 2)
         {
@@ -223,6 +262,7 @@ public sealed class LiveGraph : FrameworkElement
             DrawSeries(dc, pts, b => RY(b.Tx), X, TxPen, maxGap);
         }
         dc.DrawGeometry(null, RssiPen, line);
+        DrawPingStrip(dc, plot, X);
 
         var last = _work[^1];
         if ((now - last.Utc).TotalSeconds < 3)
@@ -246,6 +286,9 @@ public sealed class LiveGraph : FrameworkElement
                 dc.DrawEllipse(CrossDot, null, new Point(x, Y(b.Rssi)), 3, 3);
                 string txt = $"{b.Utc.ToLocalTime():HH:mm:ss.f}\n{b.Rssi} dBm   ↑{b.TxMbps:0}  ↓{b.RxMbps:0} Mbps" +
                              (b.RetryPct is double r ? $"\nretries {r:0.0}%" : "");
+                if (NearestPing(b.Utc) is PingSample ps) txt += ps.Ms is double pm ? $"\nrouter ping {PingStats.Ms(pm)} ms" : "\nrouter ping lost";
+                var scan = ScanAt(b.Utc);
+                if (scan is ScanMark sm) txt += sm.Own ? "\n(during an AirScope scan)" : "\n(around a Windows/other-app scan)";
                 DrawTip(dc, txt, new Point(x, Y(b.Rssi)), plot, dpi);
             }
         }
@@ -257,11 +300,68 @@ public sealed class LiveGraph : FrameworkElement
             LegendItem(dc, ref lx, ly, TxPen, "Tx rate", dpi);
             LegendItem(dc, ref lx, ly, RxPen, "Rx rate", dpi);
         }
+        if (_marks.Any(m => m.Own)) SwatchItem(dc, ref lx, ly, OwnScanBrush, "AirScope scan", dpi);
+        if (_marks.Any(m => !m.Own)) SwatchItem(dc, ref lx, ly, ExtScanBrush, "Windows scan", dpi);
+        if (_pings.Count > 0) SwatchItem(dc, ref lx, ly, PingGood, "ping (bottom strip)", dpi);
         if (Paused)
         {
             var ft = Palette.Text_("PAUSED", 11, Palette.Fair, dpi, true);
             dc.DrawText(ft, new Point(plot.Right - ft.Width - 8, plot.Top + 6));
         }
+    }
+
+    /// <summary>
+    /// Router pings as a strip along the bottom: green under 20 ms, amber up to the spike threshold, red above it
+    /// or lost. One cell per pixel column showing the worst ping in it, so 30-minute windows stay cheap to draw.
+    /// </summary>
+    private void DrawPingStrip(DrawingContext dc, Rect plot, Func<DateTime, double> X)
+    {
+        if (_pings.Count == 0) return;
+        int cols = Math.Max(1, (int)Math.Ceiling(plot.Width));
+        if (_pingCols.Length != cols) _pingCols = new sbyte[cols];
+        Array.Fill(_pingCols, (sbyte)-1);
+        double pxPerPing = 0.5 / WindowSeconds * plot.Width;   // a ping covers ~0.5 s
+        foreach (var p in _pings)
+        {
+            sbyte level = p.Ms is not double ms ? (sbyte)2 : ms >= PingSpikeMs ? (sbyte)2 : ms >= 20 ? (sbyte)1 : (sbyte)0;
+            int c0 = (int)Math.Floor(X(p.Utc) - plot.Left), c1 = (int)Math.Floor(X(p.Utc) - plot.Left + Math.Max(1, pxPerPing));
+            for (int c = Math.Max(0, c0); c <= Math.Min(cols - 1, c1); c++) if (level > _pingCols[c]) _pingCols[c] = level;
+        }
+        double y = plot.Bottom - PingStrip;
+        int run = 0;
+        for (int c = 1; c <= cols; c++)
+        {
+            if (c < cols && _pingCols[c] == _pingCols[run]) continue;
+            sbyte lv = _pingCols[run];
+            if (lv >= 0)
+            {
+                var b = lv == 0 ? PingGood : lv == 1 ? PingFair : PingBad;
+                double h = lv == 2 ? PingStrip + 3 : PingStrip;
+                dc.DrawRectangle(b, null, new Rect(plot.Left + run, plot.Bottom - h, c - run, h));
+            }
+            run = c;
+        }
+    }
+
+    private ScanMark? ScanAt(DateTime t)
+    {
+        foreach (var m in _marks) if (t >= m.StartUtc && t <= m.EndUtc + ScanTimeline.Settle) return m;
+        return null;
+    }
+
+    private PingSample? NearestPing(DateTime t)
+    {
+        PingSample? best = null; double bd = 0.8;
+        foreach (var p in _pings) { double d = Math.Abs((p.Utc - t).TotalSeconds); if (d < bd) { bd = d; best = p; } }
+        return best;
+    }
+
+    private static void SwatchItem(DrawingContext dc, ref double x, double y, Brush b, string label, double dpi)
+    {
+        dc.DrawRectangle(b, SwatchPen, new Rect(x, y + 2, 12, 10));
+        var ft = Palette.Text_(label, 10.5, Palette.Muted, dpi);
+        dc.DrawText(ft, new Point(x + 16, y));
+        x += 16 + ft.Width + 14;
     }
 
     private static int NearestIndex(List<LinkSample> s, DateTime t)

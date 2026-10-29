@@ -32,6 +32,7 @@ public sealed class WlanClient : IDisposable
         rc = WlanRegisterNotification(_handle, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM,
             true, _callback, IntPtr.Zero, IntPtr.Zero, out _);
         // Notifications are a nice-to-have; the app still works by polling if this fails.
+        NotificationsAvailable = rc == ERROR_SUCCESS;
     }
 
     private void OnNotification(IntPtr data, IntPtr context)
@@ -47,6 +48,8 @@ public sealed class WlanClient : IDisposable
 
     private int _inFlight;
     public bool IsDisposed => _disposed;
+    /// <summary>False if Windows refused the scan-complete notification registration.</summary>
+    public bool NotificationsAvailable { get; }
 
     /// <summary>
     /// Every API call runs inside Enter/Exit. Dispose waits for in-flight calls to finish before
@@ -287,7 +290,8 @@ public sealed class WlanClient : IDisposable
             Vendor = vendor,
             LocallyAdministered = la,
             Dfs = ChannelMath.IsDfs(band, ch),
-            SeenUtc = now
+            SeenUtc = now,
+            Tsf = tsf
         };
     }
 

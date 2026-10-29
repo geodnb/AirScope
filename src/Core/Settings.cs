@@ -13,6 +13,9 @@ public sealed class AppSettings
     public bool ExcludeOwnInAdvisor { get; set; } = true;
     public double? MiniLeft { get; set; }
     public double? MiniTop { get; set; }
+    public ScanMode ScanMode { get; set; } = ScanMode.Auto;
+    /// <summary>Ping the Wi-Fi adapter's default gateway to show latency and loss. Off by default.</summary>
+    public bool PingRouter { get; set; }
 
     public static string Folder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AirScope");
@@ -38,6 +41,7 @@ public sealed class AppSettings
         PollMs = Math.Clamp(PollMs, 100, 2000);
         ScanSeconds = Math.Clamp(ScanSeconds, 2, 120);
         GraphWindowSeconds = Math.Clamp(GraphWindowSeconds, 15, 1800);
+        if (!Enum.IsDefined(ScanMode)) ScanMode = ScanMode.Auto;
     }
 
     public void Save()

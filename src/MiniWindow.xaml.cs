@@ -35,7 +35,7 @@ public partial class MiniWindow : Window
         Closing += (_, _) => { _settings.MiniLeft = Left; _settings.MiniTop = Top; };
     }
 
-    public void Update(LinkSample? s, ConnectionInfo c, IReadOnlyList<LinkSample>? window)
+    public void Update(LinkSample? s, ConnectionInfo c, IReadOnlyList<LinkSample>? window, string? ping)
     {
         if (s is not LinkSample x || !c.Connected)
         {
@@ -51,7 +51,7 @@ public partial class MiniWindow : Window
         Quality.Foreground = Palette.B(col);
         Tx.Text = $"↑ {x.TxMbps:0} Mbps";
         Rx.Text = $"↓ {x.RxMbps:0} Mbps";
-        Info.Text = $"{c.Ssid} · ch {c.Channel}";
+        Info.Text = (ping != null ? $"{ping} · " : "") + $"{c.Ssid} · ch {c.Channel}";   // ping first so a long SSID can't hide it
         if (window != null)
         {
             var cutoff = DateTime.UtcNow.AddSeconds(-60);

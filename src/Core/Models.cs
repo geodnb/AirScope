@@ -34,6 +34,8 @@ public sealed class BssInfo
     public bool LocallyAdministered { get; init; }
     public bool Dfs { get; init; }
     public DateTime SeenUtc { get; init; }
+    /// <summary>AP's TSF timer from the beacon/probe response; unchanged means Windows hasn't heard it again.</summary>
+    public ulong Tsf { get; init; }
 
     public double LowFreq => CenterFreqMHz - WidthMHz / 2.0;
     public double HighFreq => CenterFreqMHz + WidthMHz / 2.0;
@@ -61,7 +63,22 @@ public sealed class ConnectionInfo
 }
 
 /// <summary>One fast-poll sample of the current link.</summary>
-public readonly record struct LinkSample(DateTime Utc, int Rssi, double RxMbps, double TxMbps, double? RetryPct);
+/// <param name="RetryPct">Retries as % of transmitted frames over the last second (raw, jumpy).</param>
+/// <param name="RetryAvgPct">Retries over the last ~10 s, leaving out seconds that overlapped a scan.</param>
+/// <param name="DuringScan">Taken while one of AirScope's own scans had the radio off-channel.</param>
+public readonly record struct LinkSample(DateTime Utc, int Rssi, double RxMbps, double TxMbps, double? RetryPct,
+    double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false);
+
+/// <summary>When neighbour scans are allowed to take the radio off-channel.</summary>
+public enum ScanMode
+{
+    /// <summary>Scan only while a neighbour view (Networks, Channels, History, Advisor) is on screen.</summary>
+    Auto = 0,
+    /// <summary>Scan every interval, whatever is on screen.</summary>
+    Always = 1,
+    /// <summary>Never trigger scans; show whatever Windows' own background scans found.</summary>
+    Passive = 2
+}
 
 public enum EventKind { Info, Roam, Disconnect, Connect, Warning, Good }
 

@@ -75,9 +75,11 @@
                             <TextBlock Text="LIVE POLL RATE" Style="{StaticResource H}"/>
                             <ComboBox x:Name="PollBox" SelectionChanged="PollBox_SelectionChanged" Margin="0,0,0,14"/>
                             <TextBlock Text="NEIGHBOUR SCAN INTERVAL" Style="{StaticResource H}"/>
-                            <ComboBox x:Name="ScanBox" SelectionChanged="ScanBox_SelectionChanged" Margin="0,0,0,6"/>
+                            <ComboBox x:Name="ScanBox" SelectionChanged="ScanBox_SelectionChanged" Margin="0,0,0,14"/>
+                            <TextBlock Text="WHEN TO SCAN" Style="{StaticResource H}"/>
+                            <ComboBox x:Name="ScanModeBox" SelectionChanged="ScanModeBox_SelectionChanged" Margin="0,0,0,6"/>
                             <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,0,0,14"
-                                       Text="Each scan briefly takes the radio off-channel. Short intervals can add small latency spikes while gaming — 10 s+ is gentler."/>
+                                       Text="Each scan takes the radio off-channel for a moment: a brief signal dip, a burst of retries and a latency spike. Auto only scans while you're looking at Networks, Channels, History or Advisor (and pauses a minute after you switch away, e.g. to a game). AirScope doesn't scan during spot tests. Windows still scans now and then on its own."/>
                             <CheckBox x:Name="MiniTopCheck" Content="Mini window stays on top" Click="MiniTop_Click" Margin="0,0,0,14"/>
                             <Button Content="Open logs folder" Click="OpenLogs_Click" HorizontalAlignment="Stretch" Margin="0,0,0,6"/>
                             <Button Content="Windows location settings" Click="OpenLocation_Click" HorizontalAlignment="Stretch"/>
@@ -159,6 +161,22 @@
                                     <TextBlock x:Name="StatNote" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,10,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
+
+                            <Border x:Name="PingCard" Style="{StaticResource Card}" Margin="0,12,0,0" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock x:Name="PingHeader" Text="ROUTER PING" Style="{StaticResource H}"/>
+                                    <UniformGrid Columns="4">
+                                        <StackPanel><TextBlock Text="Now ms" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="PingNow" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="Avg ms" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="PingAvg" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="95% ms" Foreground="{StaticResource Muted}" FontSize="11.5" ToolTip="95th percentile: 1 in 20 successful pings was slower than this (lost pings are counted under Loss)"/><TextBlock x:Name="PingP95" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                        <StackPanel><TextBlock Text="Loss" Foreground="{StaticResource Muted}" FontSize="11.5"/><TextBlock x:Name="PingLoss" Text="—" FontSize="17" FontFamily="{StaticResource MonoFont}"/></StackPanel>
+                                    </UniformGrid>
+                                    <ui:Sparkline x:Name="PingSpark" Height="34" Margin="0,8,0,0" Min="0" Max="20" Stroke="#7AA2FF"/>
+                                    <TextBlock x:Name="PingNote" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Foreground="{StaticResource Muted}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" Opacity="0.8"
+                                               Text="Routers answer pings at low priority, so an odd spike can be the router being busy. Spikes that line up with shaded scan periods are the scan."/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -174,6 +192,8 @@
                                     <TextBlock Text="LIVE SIGNAL" Style="{StaticResource H}" Margin="0" VerticalAlignment="Center"/>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                         <CheckBox x:Name="RatesCheck" Content="Link rates" Click="RatesCheck_Click" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                                        <CheckBox x:Name="PingCheck" Content="Router ping" Click="PingCheck_Click" Margin="0,0,16,0" VerticalAlignment="Center"
+                                                  ToolTip="Ping your router (this Wi-Fi adapter's default gateway) twice a second to see real latency and loss. Sent with TTL 1, so the packets can't go past your router. Your choice is remembered."/>
                                         <StackPanel x:Name="WindowChips" Orientation="Horizontal"/>
                                         <Button x:Name="PauseBtn" Content="❚❚" Click="Pause_Click" Padding="10,4" Margin="6,0,0,0" ToolTip="Freeze the graph (hover to inspect)"/>
                                     </StackPanel>
@@ -371,7 +391,7 @@
                         <StackPanel>
                             <TextBlock Text="MEASURE &amp; COMPARE" Style="{StaticResource H}"/>
                             <TextBlock Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,12"
-                                       Text="Records your link for a fixed time and keeps the result, so you can compare setups fairly — e.g. stock vs new antennas, router position, channel or band. Keep the PC still during a run."/>
+                                       Text="Records your link for a fixed time and keeps the result, so you can compare setups fairly — e.g. stock vs new antennas, router position, channel or band. Keep the PC still during a run. Scanning pauses while a test runs; turn on Router ping (Live tab) to include latency and loss."/>
                             <StackPanel Orientation="Horizontal">
                                 <Grid Width="280">
                                     <TextBox x:Name="SpotLabel" TextChanged="SpotLabel_Changed"/>
@@ -399,9 +419,9 @@
                             <DataGrid x:Name="SpotGrid" SelectionMode="Extended">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="" Binding="{Binding BaselineMark}" Width="28"/>
-                                    <DataGridTextColumn Header="Label" Binding="{Binding Label}" Width="200"/>
+                                    <DataGridTextColumn Header="Label" Binding="{Binding Label}" Width="160"/>
                                     <DataGridTextColumn Header="Taken" Binding="{Binding TakenText}" SortMemberPath="TakenLocal" Width="100"/>
-                                    <DataGridTextColumn Header="Network" Binding="{Binding Ssid}" Width="130"/>
+                                    <DataGridTextColumn Header="Network" Binding="{Binding Ssid}" Width="110"/>
                                     <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="66"/>
                                     <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" Width="44"/>
                                     <DataGridTextColumn Header="Avg dBm" Binding="{Binding RssiText}" SortMemberPath="RssiAvg" Width="70"/>
@@ -412,8 +432,10 @@
                                     <DataGridTextColumn Header="Δ Tx" Binding="{Binding DeltaTx}" Width="64"/>
                                     <DataGridTextColumn Header="Rx Mbps" Binding="{Binding RxText}" SortMemberPath="RxAvg" Width="70"/>
                                     <DataGridTextColumn Header="Retries" Binding="{Binding RetryText}" Width="64"/>
-                                    <DataGridTextColumn Header="Roams" Binding="{Binding Roams}" Width="60"/>
-                                    <DataGridTextColumn Header="Length" Binding="{Binding LengthText}" Width="60"/>
+                                    <DataGridTextColumn Header="Ping avg/95%" Binding="{Binding PingText}" SortMemberPath="PingAvg" Width="96"/>
+                                    <DataGridTextColumn Header="Loss" Binding="{Binding LossText}" SortMemberPath="PingLossPct" Width="54"/>
+                                    <DataGridTextColumn Header="Roams" Binding="{Binding Roams}" Width="54"/>
+                                    <DataGridTextColumn Header="Length" Binding="{Binding LengthText}" Width="54"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
