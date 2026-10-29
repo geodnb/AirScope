@@ -14,6 +14,18 @@ AirScope shows you what your Wi-Fi is really doing: a live, smooth signal graph 
 
 It was built as a better alternative to the WiFi Analyzer app commonly used on Windows, which can feel laggy, basic and unreliable.
 
+## Highlights
+
+- **Live signal up to 10 times a second**, read straight from your adapter's driver, on a graph that scrolls smoothly in real time.
+- **True channel widths** (20 / 40 / 80 / 160 / 320 MHz) for every nearby network, so you can see real overlap.
+- **Wi-Fi 4, 5, 6, 6E and 7** detection, including Wi-Fi 7 multi-link (MLO).
+- **Channel advisor** that scores every channel block and follows UK/EU rules.
+- **Roam, disconnect and DFS radar event detection.**
+- **Spot tests** for before/after comparisons (antennas, router position, channel changes).
+- **Mini mode**: a small always-on-top signal monitor.
+- **CSV recording** of everything it sees.
+- **No admin rights, no internet access, no telemetry, no changes to your PC.**
+
 <img width="1660" height="1056" alt="Screenshot 2026-10-29 032707" src="https://github.com/user-attachments/assets/623eafc6-0157-488f-9b84-1b7035c1f9fb" />
 
 
@@ -32,21 +44,6 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 - [Troubleshooting](#troubleshooting)
 - [Building from source](#building-from-source)
 - [Disclaimer](#disclaimer)
-
----
-
-## Highlights
-
-- **Live signal up to 10 times a second**, read straight from your adapter's driver, on a graph that scrolls smoothly in real time.
-- **True channel widths** (20 / 40 / 80 / 160 / 320 MHz) for every nearby network, so you can see real overlap.
-- **Wi-Fi 4, 5, 6, 6E and 7** detection, including Wi-Fi 7 multi-link (MLO).
-- **Channel advisor** that scores every channel block and follows UK/EU rules.
-- **Roam, disconnect and DFS radar event detection.**
-- **Spot tests** for before/after comparisons (antennas, router position, channel changes).
-- **Mini mode**: a small always-on-top signal monitor.
-- **CSV recording** of everything it sees.
-- **No admin rights, no internet access, no telemetry, no changes to your PC.**
-
 ---
 
 ## Features
