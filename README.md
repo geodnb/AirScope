@@ -10,7 +10,7 @@
 
 > **[⬇ Download AirScope.exe](https://github.com/geodnb/AirScope/releases/latest/download/AirScope.exe)** — single portable file, no installer, no admin rights. &nbsp;·&nbsp; [All releases](https://github.com/geodnb/AirScope/releases)
 
-AirScope shows you what your Wi-Fi is really doing: a live, smooth signal graph for your own connection, every nearby network with its true channel width and Wi-Fi generation, a channel advisor that understands UK rules, and timed spot tests for fair before/after comparisons.
+AirScope shows you what your Wi-Fi is really doing: a live signal graph for your own connection, every nearby network with accurate channel width and Wi-Fi generation, a channel advisor that understands UK rules, and timed spot tests for fair before/after comparisons.
 
 It was built as a better alternative to the WiFi Analyzer app commonly used on Windows, which can feel laggy, basic and unreliable.
 
