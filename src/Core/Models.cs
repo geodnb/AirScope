@@ -39,7 +39,11 @@ public sealed class BssInfo
 
     public double LowFreq => CenterFreqMHz - WidthMHz / 2.0;
     public double HighFreq => CenterFreqMHz + WidthMHz / 2.0;
-    public string DisplaySsid => Hidden ? "‹hidden›" : Ssid;
+    /// <summary>Name for display (masked in screenshot mode). Logs and comparisons use <see cref="Ssid"/>.</summary>
+    public string DisplaySsid => Privacy.Name(Ssid, Hidden);
+    /// <summary>Stable key for colour-coding, so colours don't change when screenshot mode is toggled.</summary>
+    public string ColorKey => Hidden ? "‹hidden›" : Ssid;
+    public string DisplayBssid => Privacy.Mac(Bssid);
     public string GenLabel => Generation switch { 7 => "Wi-Fi 7", 6 => "Wi-Fi 6", 5 => "Wi-Fi 5", 4 => "Wi-Fi 4", _ => "Legacy" };
 }
 
@@ -66,8 +70,14 @@ public sealed class ConnectionInfo
 /// <param name="RetryPct">Retries as % of transmitted frames over the last second (raw, jumpy).</param>
 /// <param name="RetryAvgPct">Retries over the last ~10 s, leaving out seconds that overlapped a scan.</param>
 /// <param name="DuringScan">Taken while one of AirScope's own scans had the radio off-channel.</param>
+/// <param name="TxFrames">Frames sent in the counter interval <paramref name="RetryPct"/> covers. Few frames = a noisy percentage.</param>
+/// <param name="TxFps">Those frames per second.</param>
+/// <param name="TxFpsAvg">Scan-free frames per second behind <paramref name="RetryAvgPct"/>.</param>
+/// <param name="TxRetries">Of <paramref name="TxFrames"/>, how many needed a retry.</param>
+/// <param name="RetrySeq">Which counter read produced <paramref name="RetryPct"/> (several samples share one), so each is counted once.</param>
 public readonly record struct LinkSample(DateTime Utc, int Rssi, double RxMbps, double TxMbps, double? RetryPct,
-    double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false);
+    double? RetryAvgPct = null, bool DuringScan = false, bool CountersOk = false,
+    int TxFrames = 0, double TxFps = 0, double TxFpsAvg = 0, long RetrySeq = 0, int TxRetries = 0);
 
 /// <summary>When neighbour scans are allowed to take the radio off-channel.</summary>
 public enum ScanMode
@@ -86,7 +96,35 @@ public sealed class EventEntry
 {
     public DateTime Local { get; init; } = DateTime.Now;
     public EventKind Kind { get; init; }
+    /// <summary>The full message with real names and addresses (for anything that isn't the screen).</summary>
     public string Text { get; init; } = "";
+    /// <summary>
+    /// Optional template with {s0}, {s1}… for network names and {b0}, {b1}… for hardware addresses, so the
+    /// screen can mask exactly those parts in screenshot mode instead of guessing them from finished text.
+    /// </summary>
+    public string? Template { get; init; }
+    public string[] Ssids { get; init; } = Array.Empty<string>();
+    public string[] Bssids { get; init; } = Array.Empty<string>();
+
+    /// <summary>Text as displayed: network names and addresses masked in screenshot mode.</summary>
+    public string Shown => Template == null ? Privacy.Text(Text) : Fill(Template, Ssids, Bssids, Privacy.Name, Privacy.Mac);
+
+    /// <summary>Build an event whose names and addresses can be masked on screen.</summary>
+    public static EventEntry Make(EventKind kind, string template, string[] ssids, string[] bssids) => new()
+    {
+        Kind = kind, Template = template, Ssids = ssids, Bssids = bssids,
+        Text = Fill(template, ssids, bssids, s => s, b => b)
+    };
+
+    private static string Fill(string t, string[] ssids, string[] bssids, Func<string, bool, string> name, Func<string, string> mac)
+    {
+        for (int i = 0; i < ssids.Length; i++) t = t.Replace("{s" + i + "}", name(ssids[i], false));
+        for (int i = 0; i < bssids.Length; i++) t = t.Replace("{b" + i + "}", mac(bssids[i]));
+        return t;
+    }
+
+    private static string Fill(string t, string[] ssids, string[] bssids, Func<string, string> name, Func<string, string> mac) =>
+        Fill(t, ssids, bssids, (s, _) => name(s), mac);
     public string TimeText => Local.ToString("HH:mm:ss");
     public string Icon => Kind switch
     {

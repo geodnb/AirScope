@@ -16,6 +16,8 @@ public sealed class AppSettings
     public ScanMode ScanMode { get; set; } = ScanMode.Auto;
     /// <summary>Ping the Wi-Fi adapter's default gateway to show latency and loss. Off by default.</summary>
     public bool PingRouter { get; set; }
+    /// <summary>Screenshot mode: mask network names and hardware addresses on screen.</summary>
+    public bool HideIdentifiers { get; set; }
 
     public static string Folder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AirScope");

@@ -80,7 +80,10 @@
                             <ComboBox x:Name="ScanModeBox" SelectionChanged="ScanModeBox_SelectionChanged" Margin="0,0,0,6"/>
                             <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,0,0,14"
                                        Text="Each scan takes the radio off-channel for a moment: a brief signal dip, a burst of retries and a latency spike. Auto only scans while you're looking at Networks, Channels, History or Advisor (and pauses a minute after you switch away, e.g. to a game). AirScope doesn't scan during spot tests. Windows still scans now and then on its own."/>
-                            <CheckBox x:Name="MiniTopCheck" Content="Mini window stays on top" Click="MiniTop_Click" Margin="0,0,0,14"/>
+                            <CheckBox x:Name="MiniTopCheck" Content="Mini window stays on top" Click="MiniTop_Click" Margin="0,0,0,10"/>
+                            <CheckBox x:Name="ScreenshotCheck" Content="Screenshot mode" Click="ScreenshotCheck_Click" Margin="0,0,0,4"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,0,0,14"
+                                       Text="Hides network names and hardware addresses (BSSIDs) on screen, so you can share screenshots without revealing where you are. Recordings keep the real values."/>
                             <Button Content="Open logs folder" Click="OpenLogs_Click" HorizontalAlignment="Stretch" Margin="0,0,0,6"/>
                             <Button Content="Windows location settings" Click="OpenLocation_Click" HorizontalAlignment="Stretch"/>
                             <TextBlock x:Name="AboutText" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,14,0,0" TextWrapping="Wrap"/>
@@ -196,6 +199,8 @@
                                                   ToolTip="Ping your router (this Wi-Fi adapter's default gateway) twice a second to see real latency and loss. Sent with TTL 1, so the packets can't go past your router. Your choice is remembered."/>
                                         <StackPanel x:Name="WindowChips" Orientation="Horizontal"/>
                                         <Button x:Name="PauseBtn" Content="❚❚" Click="Pause_Click" Padding="10,4" Margin="6,0,0,0" ToolTip="Freeze the graph (hover to inspect)"/>
+                                        <Button x:Name="ClearBtn" Content="Clear" Click="ClearGraph_Click" Padding="10,4" Margin="6,0,0,0"
+                                                ToolTip="Start the graph and its statistics afresh: signal, retries and router ping. Events and recordings are kept."/>
                                     </StackPanel>
                                 </DockPanel>
                                 <ui:LiveGraph x:Name="Live"/>
@@ -213,7 +218,7 @@
                                             <DockPanel>
                                                 <TextBlock DockPanel.Dock="Left" Text="{Binding TimeText}" Foreground="{StaticResource Muted}" FontFamily="{StaticResource MonoFont}" Width="70"/>
                                                 <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Width="20" FontWeight="Bold" x:Name="ic"/>
-                                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding Shown}" TextWrapping="Wrap"/>
                                             </DockPanel>
                                             <DataTemplate.Triggers>
                                                 <DataTrigger Binding="{Binding Kind}" Value="Roam"><Setter TargetName="ic" Property="Foreground" Value="#7AA2FF"/></DataTrigger>
@@ -419,9 +424,9 @@
                             <DataGrid x:Name="SpotGrid" SelectionMode="Extended">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="" Binding="{Binding BaselineMark}" Width="28"/>
-                                    <DataGridTextColumn Header="Label" Binding="{Binding Label}" Width="160"/>
+                                    <DataGridTextColumn Header="Label" Binding="{Binding LabelShown}" SortMemberPath="Label" Width="160"/>
                                     <DataGridTextColumn Header="Taken" Binding="{Binding TakenText}" SortMemberPath="TakenLocal" Width="100"/>
-                                    <DataGridTextColumn Header="Network" Binding="{Binding Ssid}" Width="110"/>
+                                    <DataGridTextColumn Header="Network" Binding="{Binding SsidShown}" Width="110"/>
                                     <DataGridTextColumn Header="Band" Binding="{Binding Band}" Width="66"/>
                                     <DataGridTextColumn Header="Ch" Binding="{Binding Channel}" Width="44"/>
                                     <DataGridTextColumn Header="Avg dBm" Binding="{Binding RssiText}" SortMemberPath="RssiAvg" Width="70"/>

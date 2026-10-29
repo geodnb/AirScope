@@ -40,6 +40,8 @@ public sealed class SpotTestResult
     public string RangeText => $"{RssiMin:0} … {RssiMax:0}";
     public string StabilityText => $"±{RssiStdDev:0.0}";
     public string RetryText => RetryAvg is double r ? $"{r:0.0}%" : "—";
+    [System.Text.Json.Serialization.JsonIgnore] public string SsidShown => Privacy.Name(Ssid);
+    [System.Text.Json.Serialization.JsonIgnore] public string LabelShown { get { Privacy.Register(Ssid); return Privacy.Text(Label); } }
     [System.Text.Json.Serialization.JsonIgnore] public string PingText => PingAvg is double a ? $"{PingStats.Ms(a)} / {PingStats.Ms(PingP95)}" : "—";
     [System.Text.Json.Serialization.JsonIgnore] public string LossText => PingLossPct is double l ? $"{l:0.#}%" : "—";
 }
@@ -84,7 +86,11 @@ public sealed class SpotTestRunner
         ScanTimeline.ExcludeCovered(_samples, x => x.Utc, scans, clean);
         var use = clean.Count * 2 >= _samples.Count ? clean : _samples;
         var st = Stats.Of(use.Select(x => (double)x.Rssi).ToList());
-        var retries = use.Where(x => x.RetryPct.HasValue).Select(x => x.RetryPct!.Value).ToList();
+        // Frame-weighted (Σ retries / Σ frames), so idle seconds with a handful of frames can't swing the result.
+        // Several samples share one counter read; count each read once.
+        var withRetry = use.Where(x => x.RetryPct.HasValue && x.TxFrames > 0 && x.RetrySeq > 0)
+            .GroupBy(x => x.RetrySeq).Select(g => g.First()).ToList();
+        double frames = withRetry.Sum(x => (double)x.TxFrames);
         return new SpotTestResult
         {
             Label = string.IsNullOrWhiteSpace(Label) ? $"Test {DateTime.Now:HH:mm}" : Label.Trim(),
@@ -98,7 +104,7 @@ public sealed class SpotTestRunner
             RssiAvg = st.Avg, RssiMin = st.Min, RssiMax = st.Max, RssiStdDev = st.StdDev,
             RxAvg = use.Average(x => x.RxMbps),
             TxAvg = use.Average(x => x.TxMbps),
-            RetryAvg = retries.Count > 0 ? retries.Average() : null,
+            RetryAvg = frames > 0 ? withRetry.Sum(x => x.RetryPct!.Value * x.TxFrames) / frames : null,
             Roams = _roams
         };
     }
