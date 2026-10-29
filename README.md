@@ -34,9 +34,50 @@ It was built as a better alternative to the WiFi Analyzer app commonly used on W
 
 ---
 
+## Gallery
+
+<p align="center">
+  <a href="docs/screenshots/live.png"><img src="docs/screenshots/live.png" alt="Live tab: real-time signal graph with link rates, scan shading and router ping, link details and events" width="100%"></a>
+  <br><sub><b>Live</b> · real-time signal and link rates, scan shading, router ping, link details and events</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/networks.png"><img src="docs/screenshots/networks.png" alt="Networks tab: sortable table of nearby access points with details panel"></a>
+      <br><sub><b>Networks</b> · every access point, with true width, Wi-Fi generation and security</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/channels.png"><img src="docs/screenshots/channels.png" alt="Channels tab: spectrum graphs for 2.4, 5 and 6 GHz"></a>
+      <br><sub><b>Channels</b> · each network drawn across its real channel width</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="History tab: signal of several networks over time"></a>
+      <br><sub><b>History</b> · signal of several networks over 5 to 30 minutes</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/advisor.png"><img src="docs/screenshots/advisor.png" alt="Advisor tab: channel block scores with best and current markers"></a>
+      <br><sub><b>Advisor</b> · scores every channel block and says if moving is worth it</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top" align="center">
+      <a href="docs/screenshots/spot-tests.png"><img src="docs/screenshots/spot-tests.png" alt="Spot tests tab: saved measurements compared against a baseline" width="50%"></a>
+      <br><sub><b>Spot tests</b> · timed measurements compared against a baseline</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Network names and addresses are replaced with stand-ins, as Screenshot mode does.</sub>
+
+---
+
 ## Contents
 
 - [Highlights](#highlights)
+- [Gallery](#gallery)
 - [What's new](#whats-new)
 - [Features](#features)
 - [How it improves on the usual Windows Wi-Fi analyser](#how-it-improves-on-the-usual-windows-wi-fi-analyser)
