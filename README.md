@@ -10,7 +10,7 @@
 
 > **[⬇ Download AirScope.exe](https://github.com/geodnb/AirScope/releases/latest/download/AirScope.exe)** — single portable file, no installer, no admin rights. &nbsp;·&nbsp; [All releases](https://github.com/geodnb/AirScope/releases)
 
-AirScope is a GUI WIndows tool providing a live signal graph for your own connection, every nearby network with accurate channel width and Wi-Fi generation, a channel advisor that understands UK rules, and timed spot tests for fair before/after comparisons.
+AirScope is a GUI Windows tool providing a live signal graph for your own connection, every nearby network with accurate channel width and Wi-Fi generation, a channel advisor that understands UK rules, and timed spot tests for fair before/after comparisons.
 
 It was built as a better alternative to the WiFi Analyzer app commonly used on Windows, which can feel laggy, basic and unreliable.
 
