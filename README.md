@@ -1,4 +1,4 @@
-# AirScope
+# AirScope Wifi
 
 **A fast, modern, read-only Wi-Fi analyser for Windows 10 and 11.**
 
